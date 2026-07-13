@@ -68,6 +68,24 @@ def to_markdown(text):
     return text
 
 
+def validate_links(md):
+    """构建闸门：4 个链接必须全部转换成功，且无裸 URL。失败即拒绝构建。"""
+    required = [
+        "[here](" + LINKS["blog"],
+        "(more details [here](",
+        "[Reuters](",
+        "[CNBC](",
+    ]
+    missing = [x for x in required if x not in md]
+    bare = [m.group(0)[:60] for m in re.finditer(r"(?<!\]\()https?://\S+", md)]
+    if missing or bare:
+        raise SystemExit(
+            f"链接校验失败 missing={missing} bare={bare[:3]}\n"
+            "草稿正文必须逐字使用模板句式：Full blog here: <URL> / (more details here) / "
+            "including Reuters & CNBC。链接由本脚本统一转换，禁止在正文手写内联 URL。"
+        )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--row", type=int, required=True, help="名单行号 1-41")
@@ -88,11 +106,13 @@ def main():
     if not text.startswith("Hi "):
         raise SystemExit(f"row {args.row} 正文异常（不以 Hi 开头）")
 
+    md = to_markdown(text)
+    validate_links(md)
     req = {
         "sender": SENDER,
         "to": [{"email": email_addr, "name": author or greeting}],
         "subject": SUBJECT,
-        "markdown": to_markdown(text),
+        "markdown": md,
     }
     slug = re.sub(r"[^a-z0-9]+", "_", media.lower()).strip("_")[:30]
     out = Path(args.out)

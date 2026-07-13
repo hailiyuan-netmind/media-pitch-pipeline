@@ -18,7 +18,7 @@ def _campaign_cfg():
 
 _CAMPAIGN = _campaign_cfg()
 TOKEN = os.environ.get("MP_SHEET_TOKEN") or _CAMPAIGN.get("sheet_token", "")
-if not SHEET_TOKEN:
+if not TOKEN:
     raise SystemExit("缺 sheet token：写 campaign.json（参考 campaign.example.json）或设 MP_SHEET_TOKEN 环境变量")
 TAB_TITLE = "最终邮件草稿"
 
