@@ -40,7 +40,7 @@ BODY_MARKERS = [
 def flat(v):
     if isinstance(v, list):
         return "".join(s.get("text", "") if isinstance(s, dict) else str(s) for s in v)
-    return v or ""
+    return str(v) if v is not None else ""
 
 
 def main():

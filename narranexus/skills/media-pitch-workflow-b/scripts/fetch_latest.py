@@ -147,7 +147,7 @@ def load_outlets_from_sheet():
         def flat(v):
             if isinstance(v, list):
                 return "".join(s.get("text", "") if isinstance(s, dict) else str(s) for s in v)
-            return v or ""
+            return str(v) if v is not None else ""
 
         outlets.append({"row": int(row[0]), "media": flat(row[1]), "url": flat(row[8]).strip()})
     return outlets
