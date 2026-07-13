@@ -19,17 +19,24 @@
 2. **写开头**：真读该行的引用作品（或其最新一篇），按 `references/verify_and_draft.md`
    的风格规则写 2-3 句夸赞开头 + "Thanks for your time and for..." 定制结尾句。
    称呼规则：个人=名字，多作者=<Media> team，绝不跨行串名。
-3. **拼装**：`python3 scripts/assemble_emails.py`（模板在文件顶部 BODY_AI/BODY_LIFESTYLE；
+3. **事实核查（发送前强制，准确率高于一切）**：把开头和结尾句拆成逐条事实表述
+   （平台名、年限、数量、"无广告/无付费墙"类说法、文章论点、引用的具体例子），
+   每一条都必须能在引用文章或对方网站上找到依据，汇报时附出处短语；
+   收件人是最了解自己的人，任何不准确都会毁掉整封 pitch。
+   同时检查：全文对收件人一律第二人称（开头第三人称点名 = 违规）；
+   风格禁项（em-dash、we ran an experiment、truly/fascinating 类吹捧词）。
+   任何一条不过就重写，核查记录随汇报提交。
+4. **拼装**：`python3 scripts/assemble_emails.py`（模板在文件顶部 BODY_AI/BODY_LIFESTYLE；
    AI 版开头不得含 "we ran an experiment"，正文首句已有）。写入草稿 tab。
-4. **新鲜度**：发送当天 `python3 scripts/fetch_latest.py --from-sheet --write-back`；
+5. **新鲜度**：发送当天 `python3 scripts/fetch_latest.py --from-sheet --write-back`；
    过时开头按 `references/refresh_opener.md` 重写后 `python3 scripts/apply_refresh.py` 回写。
    刷新阈值：日更刊物引用 >10 天就刷，周更/随笔 >5 周才刷，跳过 housekeeping 文章。
-5. **测试**：`python3 scripts/build_request.py --row N` 构建，
+6. **测试**：`python3 scripts/build_request.py --row N` 构建，
    `--test-to <owner邮箱> --send` 发测试。人类看过才有下一步。
-6. **发送**：拿到放行指令后 `python3 scripts/send_batch.py --rows ...`（注意每日上限）。
-7. **回写**：草稿 tab I 列决定+日期、K 列 messageId；名单表状态置 `已发送`。
+7. **发送**：拿到放行指令后 `python3 scripts/send_batch.py --rows ...`（注意每日上限）。
+8. **回写**：草稿 tab I 列决定+日期、K 列 messageId；名单表状态置 `已发送`。
    完成后向人类汇报发送数/messageId 清单，并告知 A 线本日消耗量。
-8. **写后读回**：每次写表后立即读回目标单元格，汇报里附读回证据（长度或前 50 字）。
+9. **写后读回**：每次写表后立即读回目标单元格，汇报里附读回证据（长度或前 50 字）。
    没有读回证据不许报完成——虚报完成是最严重的违规。
 
 ## 你不负责什么
