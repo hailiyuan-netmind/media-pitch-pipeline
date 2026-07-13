@@ -1,0 +1,13 @@
+# 发送产物与请求文件：含记者真实邮箱(PII)与渲染邮件，不入库，可随时从表格重建
+brevo-output/
+brevo-requests/
+# 凭证类
+.env*
+*.local
+lark_config.json
+.lark_tokens.json
+__pycache__/
+*.pyc
+
+# campaign 私有配置（真实 token）
+campaign.json
