@@ -1,0 +1,1172 @@
+{
+  "summary": "Systematic audit of media-pitch-pipeline across 5 dimensions, adversarially verified",
+  "agentCount": 10,
+  "logs": [
+    "[verify:bundle-and-env] failed: You've hit your session limit · resets 8:10pm (Europe/London)",
+    "review done: 88 findings, 75 confirmed across 5 dimensions"
+  ],
+  "result": {
+    "dimensions": [
+      {
+        "dimension": "scripts-correctness",
+        "review": {
+          "dimension": "scripts-correctness",
+          "findings": [
+            {
+              "id": "scripts-correctness-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 141,
+              "issue": "assemble_emails pairs each agent result (greeting/opener/body, keyed by it['row']) with the email address from by_row[n]['邮箱'] but never cross-checks it['media'] against src['媒体'], so a result item carrying a wrong row number is silently welded to another outlet's email address.",
+              "severity": "critical",
+              "failure_scenario": "A verify sub-agent assigned rows 10-18 off-by-ones its output and returns {row: 11, media: 'TheSequence', ...} while list #11 is 'Ben's Bites'. Draft row 11 then contains TheSequence's greeting and opener with Ben's Bites' email in column D. build_request reads that same row (body and address are internally consistent, so no gate fires), send_batch's recipient check passes (send_prep derives from the same cell), and the Ben's Bites journalist receives an email praising a different publication addressed to a different person — exactly the known 'praise to wrong author' incident class, now automated.",
+              "fix": "In the assembly loop, hard-fail (raise SystemExit) when src.get('媒体') and it['media'] are both non-empty and differ (normalize whitespace/case). Also fail if src is {} (row number not present in /tmp/media_rows.json) instead of writing an empty email address."
+            },
+            {
+              "id": "scripts-correctness-2",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 129,
+              "issue": "Draft rows are written compacted (`for n in sorted(results)` appended sequentially from A2) even when rows are missing — line 115-117 prints '!! 缺少行' but continues — so the pipeline-wide invariant 'draft sheet row = # + 1' silently breaks; every downstream stage (build_request --row, apply_refresh row+1, fetch_latest --write-back J column) then addresses the wrong physical row.",
+              "severity": "critical",
+              "failure_scenario": "One verify agent fails on outlet #7, so results = {1..6, 8..41}. assemble writes #8 at physical row 8 (not 9), #9 at row 9, etc. Later `build_request.py --row 8` reads physical row 9 = outlet #9's draft, and `apply_refresh.py` for row 8 splices outlet #8's new opener into outlet #9's email. Journalists from #8 onward receive content generated for the neighboring outlet.",
+              "fix": "Anchor every row to its number: write each record at range A{n+1}:I{n+1} (per-row update_sheet_values, or build a full grid with blank placeholder rows for gaps). Additionally, turn the '缺少行' warning into a hard failure (raise SystemExit) unless an explicit --allow-missing flag is passed."
+            },
+            {
+              "id": "scripts-correctness-3",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 96,
+              "issue": "build_request trusts positional alignment twice with zero identity verification: it reads draft row args.row+1 without checking that column A of that row equals args.row, and separately reads the recipient display name from LIST_SHEET C{r} of the *other* sheet under the same positional assumption — the two sheets can misalign independently (compacted draft per finding 2, or a colleague manually deleting/inserting a list-sheet row).",
+              "severity": "critical",
+              "failure_scenario": "A colleague deletes rejected outlet row 12 from 可发送名单 (rows below shift up) while the draft tab is untouched. `build_request.py --row 20` now builds outlet #20's body and email address but sets to[0].name = list-sheet C21, which after the shift is outlet #21's author. The journalist receives an email whose To: display name is a different person — a third-person/wrong-name incident that no existing gate (validate_links, send_batch email comparison) can catch, since the email address still matches send_prep.",
+              "fix": "Fetch A{r}:H{r} (already does A:H — include index 0 in the check): assert int(flat(row[0])) == args.row for the draft sheet, and fetch A{r}:C{r} from LIST_SHEET asserting its '#' cell equals args.row and its 媒体 cell matches the draft's media before using column C as the author. Also assert '@' in email_addr. Any mismatch: SystemExit."
+            },
+            {
+              "id": "scripts-correctness-4",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 66,
+              "issue": "/tmp/send_log.json is written only once at the very end, and several mid-loop expressions can raise uncaught exceptions after emails have already gone out: `expect = prep[n]` (line 30) raises KeyError for any row absent from /tmp/send_prep.json, and `m.group(1)` (line 40) raises AttributeError if the 'written:' line isn't found in stdout. A crash between the first send and the final write loses every messageId of the batch.",
+              "severity": "critical",
+              "failure_scenario": "Operator runs `send_batch.py --rows 1,2,39` where row 39 was never added to send_prep.json. Rows 1 and 2 are SENT to real journalists, then `prep[39]` raises KeyError, the process dies, and /tmp/send_log.json is never created. The messageIds for rows 1-2 exist only in scrollback; K-column write-back has nothing to consume, and a re-run of `--rows 1,2,39` sends rows 1 and 2 a second time — duplicate mail to journalists plus loss of the send record.",
+              "fix": "(a) Validate upfront: `missing = [n for n in rows if n not in prep]; if missing: sys.exit(...)` before any send. (b) Persist incrementally: rewrite /tmp/send_log.json (json.dump of the log list) at the end of every loop iteration, not once at the end. (c) Wrap m.group in a None check that logs build_output_unparsed and continues."
+            },
+            {
+              "id": "scripts-correctness-5",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 60,
+              "issue": "The bare `except Exception` around the send-result parse conflates 'send actually failed' with 'send succeeded but stdout was not clean JSON' (json.loads of full stdout, then two nested dict lookups) — it never consults s.returncode, so a successful send whose output has any extra line is reported as SEND FAILED.",
+              "severity": "high",
+              "failure_scenario": "bootstrap_runtime.sh (or a python warning inside it) prints one non-JSON line before the JSON payload. Brevo accepts the email (201), but json.loads(s.stdout) raises, the row is logged as send_failed, and the operator/agent does the natural thing — re-runs that row — so the journalist receives the same pitch twice. The real messageId is also discarded, so the duplicate is undetectable from the log.",
+              "fix": "Check s.returncode first; parse JSON tolerantly (e.g., locate the first '{' / last '}' or parse the last non-empty stdout line). If returncode == 0 but parsing still fails, log status 'sent_unconfirmed' with raw output and print an explicit DO-NOT-RETRY warning instead of 'SEND FAILED'."
+            },
+            {
+              "id": "scripts-correctness-6",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 25,
+              "issue": "No idempotency guard anywhere: `--rows 3,3` sends row 3 twice (no dedupe of the parsed list), and nothing consults prior state (existing /tmp/send_log.json, or the sheet's K messageId / L 状态 columns) before sending, so re-invocation with an overlapping row set silently resends.",
+              "severity": "high",
+              "failure_scenario": "First run sends rows 1-20 successfully. A second invocation with --rows 15,21,22 (operator misremembers where the first batch ended, or an agent replays the command from its plan) resends row 15. The journalist gets a duplicate pitch; the sheet has no state machine enforcement in code so nothing blocks it.",
+              "fix": "Dedupe rows preserving order (`dict.fromkeys`). Before sending each row, read the sheet's K/L cells for that row (or the previous /tmp/send_log.json) and refuse to send when a messageId / 已发送 state already exists unless --force is passed."
+            },
+            {
+              "id": "scripts-correctness-7",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 141,
+              "issue": "Hardcoded range `A2:I42` caps the list sheet read at 41 data rows (confirmed live bug — the sheet already has 43 data rows); outlets 42+ are silently invisible to the freshness stage. The same class exists in build_request.py's help text ('1-41') and the paired write-back sizing.",
+              "severity": "high",
+              "failure_scenario": "Rows 42 and 43 (new outlets added this campaign) never appear in latest_articles.json, are never listed in the coverage report, and never get J-column freshness data — so their openers are never refreshed and go out citing stale articles, with no error or warning anywhere.",
+              "fix": "Read the sheet's actual extent: GET metainfo, take rowCount for LIST_SHEET (or read a generous fixed bound like A2:I1000) and stop at the first row where column A is empty. Apply the same pattern to every hardcoded 42/41 assumption (fetch_latest.py:141, build_request.py:91 help text)."
+            },
+            {
+              "id": "scripts-correctness-8",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 201,
+              "issue": "--write-back builds the J column sequentially (header + one row per result in row-sorted order) and writes J1:J{len(col)} to the draft tab, instead of anchoring each result at J{row+1}; any list-sheet row skipped by the `row[0] is None: continue` (line 144-145) or any gap in '#' shifts all subsequent freshness cells up by one onto the wrong outlet.",
+              "severity": "high",
+              "failure_scenario": "A colleague clears the '#' cell of a rejected outlet (row stays physically present but is skipped by the None check). Every outlet below it gets the previous outlet's RSS articles in its J cell. The refresh stage (prompts/refresh_opener.md driven by J) then rewrites openers citing another publication's latest article — content actually shipped to journalists praises the wrong outlet's work.",
+              "fix": "Write per-result anchored cells: for each r in results, update J{r['row']+1} with that outlet's lines (batch as contiguous runs if desired). Write the header to J1 separately. Never derive the target row from the loop index."
+            },
+            {
+              "id": "scripts-correctness-9",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 104,
+              "issue": "Hardcoded `for i in range(1, 6)` over /tmp/result{1..5}.json: crashes with FileNotFoundError if a campaign spawns fewer than 5 verify agents, and silently ignores result6.json+ when it spawns more — same fixed-cardinality class as the A2:I42 bug.",
+              "severity": "high",
+              "failure_scenario": "Next campaign has 50 verified outlets → 6 batches → /tmp/result6.json. assemble runs cleanly, prints '!! 缺少行' for 8-9 rows, and (because it continues anyway, finding 2) writes a compacted draft tab missing those outlets while all row math downstream shifts. Conversely a 3-batch campaign crashes on open('/tmp/result4.json') and never writes anything.",
+              "fix": "Replace the fixed range with `sorted(Path('/tmp').glob('result*.json'))` (or an explicit --results glob argument), and require at least one file; keep the last-write-wins merge but log which file supplied each row."
+            },
+            {
+              "id": "scripts-correctness-10",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 171,
+              "issue": "On re-run against an existing tab ('tab 已存在则直接复用'), the script overwrites A1:I{n} wholesale: column I (决定/不发 — the human review gate) is set to \"\" for every row, and G/H (email body / notes) are regenerated over any colleague hand edits or apply_refresh stamps.",
+              "severity": "high",
+              "failure_scenario": "Colleagues finish review and fill 决定 for 41 rows; a colleague also hand-fixes a factual error in row 9's G cell. The agent re-runs assemble_emails.py (e.g., after fixing one opener in result JSON). All 决定 values are wiped and row 9's hand fix is silently reverted to the uncorrected text — the corrected-then-reverted email is what build_request later sends, and the review-gate data is destroyed.",
+              "fix": "When the tab already exists, read current G/H/I first; only write G/H for rows explicitly present in the new results AND leave I untouched (write A:H ranges per row, never column I on re-run), or require a --force-overwrite flag that prints a diff before clobbering."
+            },
+            {
+              "id": "scripts-correctness-11",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 50,
+              "issue": "used_rows reads only `A1:{col_end}200`, so any tab that grows past 200 rows makes used_rows return at most 200 and the next import writes starting at row 201 — on top of existing data it cannot see. ensure_tab's rowCount (line 39) is fetched and then discarded.",
+              "severity": "high",
+              "failure_scenario": "The 已剔除 tab (fastest-growing, appended every campaign) reaches 205 rows. Next `import_outlets.py` computes used=200, first=201, and overwrites rows 201-205 with new entries — silent destruction of existing records; on 可发送名单 the same overflow would also assign duplicate '#' sequence numbers, corrupting the row=#+1 invariant for every downstream stage.",
+              "fix": "Use the rowCount already returned by ensure_tab (and metainfo for existing tabs) as the read bound instead of the literal 200: `d = c.get_sheet_values(token, f\"{sid}!A1:{col_end}{row_count}\")`; if the write range would exceed the grid, first extend it via the dimension_range insert API."
+            },
+            {
+              "id": "scripts-correctness-12",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 80,
+              "issue": "The validate_links gate has two bypasses: (a) the bare-URL regex only matches `https?://`, so scheme-less URLs like 'www.example.com/post' pass and reach the journalist as unstyled text; (b) it only asserts the 4 canonical links exist — any *extra* hand-inserted markdown link `[here](https://wrong-url...)` written by an agent in the opener passes both the required-list and the bare-URL check.",
+              "severity": "medium",
+              "failure_scenario": "An agent writes an opener ending 'loved your piece (www.thesequence.substack.com/p/gpt5)'. No https:// prefix → bare-URL regex misses it → the email ships with a raw non-clickable URL, the exact cosmetic failure the gate was built to prevent. Separately, an agent that 'helpfully' hand-links the blog as [here](https://blog.netmind.ai/wrong-slug) alongside template text passes the gate and ships a broken/wrong link.",
+              "fix": "(a) Extend the bare pattern to also flag `(?<![\\(/\\w])www\\.[\\w.-]+\\.[a-z]{2,}\\S*`. (b) Enumerate ALL markdown links in md with `re.findall(r'\\]\\((https?://[^)]+)\\)', md)` and require the resulting set to be exactly the 4 LINKS values — reject any extra or unexpected link URL."
+            },
+            {
+              "id": "scripts-correctness-13",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 99,
+              "issue": "All inter-stage handoff files are fixed /tmp paths with no campaign identifier or freshness check (/tmp/media_rows.json, /tmp/result{i}.json, /tmp/send_prep.json in send_batch.py:27). Stale files from a previous campaign or a previous agent workspace are silently consumed.",
+              "severity": "medium",
+              "failure_scenario": "macOS keeps /tmp contents for ~3 days. A new campaign's verify agents produce result1-3.json, but result4.json and result5.json survive from last week's campaign. assemble merges the old items: old openers keyed by row 30 pair with the NEW campaign's media_rows #30 email address (finding-1 mechanics), producing draft rows that greet last campaign's contact at this campaign's address.",
+              "fix": "Move handoff files into a campaign-scoped directory (e.g., <repo>/runs/<campaign-id>/), or embed the sheet token + campaign id in each JSON and have assemble/send_batch verify it matches campaign.json before consuming; refuse files whose mtime predates media_rows.json."
+            },
+            {
+              "id": "scripts-correctness-14",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 56,
+              "issue": "send_batch records messageIds only in /tmp/send_log.json and never writes K (messageId) / L (state 已发送) back to the sheet, leaving the known-to-fail manual agent step ('K/L columns left un-updated', 'falsely reported write-backs') as the only mechanism — and /tmp is periodically purged, so the sole durable record can vanish.",
+              "severity": "medium",
+              "failure_scenario": "Batch of 38 sends succeeds; the agent session ends before doing the manual K/L write-back (this exact failure already happened live). Three days later /tmp is cleaned and every messageId is gone; the sheet shows no send state, so the next session cannot tell which outlets were mailed and the idempotency gap (finding 6) has no data to check against.",
+              "fix": "After each successful send, immediately write messageId to K{row+1} and the state to L{row+1} via LarkClient inside send_batch itself (then read the cells back and assert non-empty, per AGENTS.md rule 1a), keeping /tmp/send_log.json as a secondary copy."
+            },
+            {
+              "id": "scripts-correctness-15",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 193,
+              "issue": "No file I/O in the pipeline pins encoding (open(), Path.read_text/write_text default to the locale codec on Python <3.15) and scripts print non-ASCII glyphs (✗/✓/Chinese) to stdout; under a C/POSIX locale (launchd, cron, minimal agent shells) reads of Chinese-keyed JSON raise UnicodeDecodeError and prints/writes raise UnicodeEncodeError.",
+              "severity": "medium",
+              "failure_scenario": "The pipeline is run from a launchd job or fresh agent sandbox without LANG set. assemble_emails crashes decoding /tmp/media_rows.json ('邮箱' keys); worse, send_batch sends several emails and then dies at print('跳过'...) or at the ensure_ascii=False log write — combining with finding 4 to lose the send log after real sends.",
+              "fix": "Add encoding='utf-8' to every open()/read_text()/write_text() across all six scripts and lib/lark_client.py, and set PYTHONUTF8=1 (or sys.stdout.reconfigure(encoding='utf-8', errors='replace')) at the top of send_batch.py and fetch_latest.py."
+            },
+            {
+              "id": "scripts-correctness-16",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 68,
+              "issue": "In parse_feed the <link> handler keeps overwriting with the last non-empty link element (`... or link` only protects against empty), so for Atom feeds carrying multiple links per entry (rel=alternate, rel=self, rel=edit, enclosure) the chosen URL is whichever appears last, not the article URL.",
+              "severity": "low",
+              "failure_scenario": "An Atom feed lists rel='alternate' (article) then rel='self'/enclosure per entry. J column gets the feed-XML or media URL; the refresh agent following that link to 'really read' the article hits XML, may mark the outlet unverifiable or cite from the wrong resource.",
+              "fix": "Prefer rel='alternate' explicitly: track `if ch.get('rel') in (None, 'alternate'): link = ...` and only fall back to other rels when no alternate link was seen."
+            },
+            {
+              "id": "scripts-correctness-17",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/lib/lark_client.py",
+              "line": 184,
+              "issue": "No timeout on any requests call in LarkClient (_request line 184, token fetches lines 99/127/147), so one hung Lark API connection blocks an unattended pipeline stage forever.",
+              "severity": "low",
+              "failure_scenario": "A network blip mid-send_batch leaves a TCP connection half-open during a build_request sheet read; the subprocess hangs indefinitely, the batch stalls between journalist sends with no error, and an operator eventually kills it — landing in the crash-mid-batch state of finding 4.",
+              "fix": "Add timeout=30 to requests.request/post in _request, get_tenant_token, auth_with_code and _do_refresh_user_token, and propagate the same change to all three synced copies of lark_client.py."
+            },
+            {
+              "id": "scripts-correctness-18",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/lib/lark_client.py",
+              "line": 201,
+              "issue": "get_doc_blocks (and list_files) fetch only the first page and ignore has_more/page_token, silently truncating documents longer than the default page size (500 blocks).",
+              "severity": "low",
+              "failure_scenario": "Campaign setup extracts canonical LINKS from a long colleague docx via get_doc_blocks (mandated because raw_content strips hyperlinks). A doc with >500 blocks returns only the first page; a link living in a later block is missing, and the agent hardcodes an incomplete/old URL into build_request.py's LINKS.",
+              "fix": "Loop with params={'page_size': 500, 'page_token': ...} while data.get('has_more'), concatenating items; return the merged list."
+            },
+            {
+              "id": "scripts-correctness-19",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 152,
+              "issue": "`int(row[0])` is applied to the raw cell before flat(), so a '#' cell that comes back as a rich-text segment list (the exact cell-type class that crashed flat() on ints before) raises TypeError and kills the whole freshness stage.",
+              "severity": "low",
+              "failure_scenario": "A colleague pastes a formatted value into one '#' cell; Lark returns it as [{'text': '17', ...}]. int() on the list raises TypeError, fetch_latest --from-sheet aborts entirely, and the day's freshness pass silently doesn't happen unless someone notices the traceback.",
+              "fix": "Use the existing helper: `outlets.append({\"row\": int(flat(row[0]).strip()), ...})`, and skip the row with a printed warning if the result isn't a digit string."
+            },
+            {
+              "id": "scripts-correctness-20",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/narranexus/build_nxbundle.py",
+              "line": 177,
+              "issue": "The 255-char persona guard (added specifically after the un-deletable-agent incident) is a bare `assert`, which is stripped under `python3 -O`, letting an oversized agent_description ship into the bundle.",
+              "severity": "low",
+              "failure_scenario": "Someone builds the bundle with PYTHONOPTIMIZE set or `python3 -O build_nxbundle.py` after editing a persona to 280 chars; the assert vanishes, the bundle imports into NarraNexus, and the known Pydantic UI bug reproduces (agent cannot be edited or deleted from the UI).",
+              "fix": "Replace the assert with an explicit check: `if n > 255: raise SystemExit(f\"{a['agent_name']} persona {n} 字 > 255\")`."
+            }
+          ]
+        },
+        "verify": {
+          "confirmed_ids": [
+            "scripts-correctness-1",
+            "scripts-correctness-2",
+            "scripts-correctness-3",
+            "scripts-correctness-4",
+            "scripts-correctness-5",
+            "scripts-correctness-6",
+            "scripts-correctness-7",
+            "scripts-correctness-8",
+            "scripts-correctness-9",
+            "scripts-correctness-10",
+            "scripts-correctness-11",
+            "scripts-correctness-12",
+            "scripts-correctness-13",
+            "scripts-correctness-14",
+            "scripts-correctness-15",
+            "scripts-correctness-16",
+            "scripts-correctness-17",
+            "scripts-correctness-18",
+            "scripts-correctness-19",
+            "scripts-correctness-20"
+          ],
+          "dimension": "scripts-correctness",
+          "rejected": [],
+          "extra_notes": "All 20 confirmed after reading every cited file and call site. Additional facts the reviewer missed: (1) prompts/verify_and_draft.md:48 claims assemble_emails.py performs an '邮箱一致性校验' (email consistency check) — no such check exists in the script, so the documented guard for finding 1 is fictional; agents reading that prompt will wrongly believe the pairing is validated. (2) Finding 7's live claim independently reproduced via a read-only Lark API call: 可发送名单 currently has 43 data rows, and outlets #42/#43 sit at physical rows 43-44, outside A2:I42; brevo-requests/pitch_42_*.json and pitch_43_*.json already exist, proving rows beyond the reviewer's '1-41' help-text bound are in active use while fetch_latest cannot see them. (3) Finding 5 trigger correction: bootstrap_runtime.sh is `exec python3 run_brevo_email.py` and that script prints exactly one clean JSON object to stdout, so the 'extra stdout line' trigger is unlikely today; the real triggers are worse — run_brevo_email.py's send_email only catches urllib.error.HTTPError, so a socket timeout/URLError while reading the response AFTER Brevo accepted the email, or a non-JSON success body (json.loads(body) uncaught), crashes run_brevo_email post-send with rc!=0 and empty stdout; send_batch then logs send_failed and invites a duplicate resend. Note that merely checking s.returncode would NOT fix this path; a 'sent_unconfirmed' state is genuinely needed. (4) /tmp/send_prep.json has no generator anywhere in the repo — send_batch's celebrated 'recipient double-check' depends on an agent hand-building that file, and if the agent derives it from the same (possibly misaligned) draft sheet the check is circular and cannot catch findings 1-3. (5) apply_refresh.py has the same unguarded positional row+1 assumption as finding 3 (writes G/H at agent-supplied row+1 with no identity check against column A/B), so finding 2/8-class shifts splice refreshed openers into the wrong outlet's email; not separately reported. (6) All six pipeline scripts are duplicated under narranexus/skills/media-pitch-workflow-{a,b}/scripts/ (not just lark_client.py as finding 17 notes) — every fix must be propagated to those copies or the NarraNexus agents will keep running the buggy versions. (7) Minor unreported crash: assemble_emails.py:132 `it[\"version\"]` and :134 `it[\"closing_line\"]` raise bare KeyError if a verify agent omits a field, aborting before any write (safe direction, but no diagnostic of which row)."
+        }
+      },
+      {
+        "dimension": "send-safety",
+        "review": {
+          "dimension": "sending-path safety: duplicate / wrong / malformed email reaching journalists (send_batch.py, build_request.py, brevo bootstrap invocation)",
+          "findings": [
+            {
+              "id": "send-safety-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 51,
+              "issue": "Zero idempotency: send_batch never checks any already-sent signal before firing an official send. It does not read the sheet K (messageId) or L (state) column, does not read the previous /tmp/send_log.json, and never writes K/L back itself (grep confirms no lark import in the file; the K/L write-back is a separate manual agent step — the exact step with a documented false-completion incident). The only 'guard' (lines 43-46) checks the address matches the prep file, which is equally true on a re-run.",
+              "severity": "critical",
+              "failure_scenario": "Today's live run sent 38 emails (/tmp/send_log.json, rows 1-41 minus 12/14/28). If the agent — or a second workflow-B agent, or the same agent after a context reset — runs `python3 send_batch.py --rows 1,2,...` again (e.g. because the sheet write-back was skipped so nothing marks the rows 已发送), all 38 journalists receive the identical pitch twice. Every check in the script passes on the second run.",
+              "fix": "In send_batch, per row before sending: read draft-tab K{n+1} and refuse with status 'already_sent' if non-empty. Immediately after each 201, write K{n+1}=messageId and L=已发送 via LarkClient, read the cell back, and abort the whole batch if the write-back or read-back fails (so a send can never exist without a durable sent-marker)."
+            },
+            {
+              "id": "send-safety-2",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 30,
+              "issue": "Human veto not enforced in code. The live /tmp/send_prep.json carries skip=true for rows 12 (Supervised), 14 (The AiEdge), 28 (Not A Bot), and the draft sheet has an I '决定(发/不发)' column, but send_batch reads neither: it sends any row number passed in --rows (build_request reads only A:H, line 97, never column I). The 3 vetoed outlets were spared today purely because the agent typed the right row list.",
+              "severity": "critical",
+              "failure_scenario": "Agent shorthand 'send rows 1-41' or a regenerated row list forgets the exclusions -> `--rows ...,12,...` -> row 12 builds fine, prep email matches built email (same source), official send goes to an outlet the human explicitly marked 不发 / that is dead (Not A Bot resolves to localhost).",
+              "fix": "In send_batch: `if expect.get('skip'): log status 'vetoed'; continue`. Additionally read draft I{n+1} and refuse to send unless the cell starts with 发 (fail closed when empty)."
+            },
+            {
+              "id": "send-safety-3",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 66,
+              "issue": "The send log — the only local record of messageIds — is written once, after the whole loop. Any uncaught exception mid-batch (line 30 `prep[n]` KeyError for a row absent from prep; line 40 `m.group(1)` AttributeError if 'written:' isn't matched; Ctrl-C) aborts the run before line 66, losing every 'sent' record of that run, while /tmp/send_log.json still contains the PREVIOUS run's contents — actively misleading state for recovery.",
+              "severity": "critical",
+              "failure_scenario": "`send_batch.py --rows 1,2,42` where prep covers 1-41: rows 1 and 2 are officially sent, then `prep[42]` raises KeyError and the process dies. No record that 1 and 2 were sent exists anywhere (sheet K also not written, see send-safety-1). The recovering agent re-runs the full list -> journalists 1 and 2 get duplicates.",
+              "fix": "Open '/tmp/send_log.jsonl' in append mode and write+flush one JSON line per row immediately after each result (before the sleep); wrap the loop body in try/except that records {'row': n, 'status': 'error', ...} and continues instead of crashing; validate all rows exist in prep (and are ints, deduped) before sending row 1."
+            },
+            {
+              "id": "send-safety-4",
+              "file": "/Users/yinchenghou/.claude/skills/brevo/scripts/run_brevo_email.py",
+              "line": 262,
+              "issue": "send_email catches only urllib.error.HTTPError. A socket timeout or connection reset after the POST body was transmitted (URLError/TimeoutError, timeout=30 at line 259) propagates as an uncaught traceback: exit code != 0, no JSON on stdout. send_batch's except branch (lines 60-63) then records the row as 'send_failed' even though Brevo may have accepted and delivered the email — an unknown outcome is affirmatively mislabeled as failure, which is precisely the state that invites a retry.",
+              "severity": "high",
+              "failure_scenario": "Transient network stall on row 17: Brevo receives the request and sends the email; the response read times out; log says send_failed; agent 'retries the failed row' -> journalist 17 receives the pitch twice.",
+              "fix": "In send_email, also catch (urllib.error.URLError, TimeoutError) and return {'ok': False, 'status': 'unknown', 'outcome_unknown': True, 'error': str(exc)}. In send_batch, record such rows as status 'unknown' and hard-refuse to resend a row with status unknown until the agent has checked Brevo transactional events for that recipient."
+            },
+            {
+              "id": "send-safety-5",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 25,
+              "issue": "The daily cap (≤40/day, workflows/B-draft-and-send.md line 10, called the protection line for the sender domain that carries the 10k-subscriber newsletter) exists only in prose. send_batch accepts an unbounded --rows list and keeps no cross-run daily tally; pacing floor in code is time.sleep(1.5) (line 64), while prose says 逐封间隔数秒.",
+              "severity": "high",
+              "failure_scenario": "Next campaign the list grows to 90 verified rows; an agent (whose charter says stages run autonomously) passes --rows 1..90 after one human 放行, or runs two 40-row batches in one day. 90 cold-outreach emails from marketing@netmind.ai in ~7 minutes trips spam heuristics and damages the shared domain.",
+              "fix": "In send_batch: `if len(rows) > 40: raise SystemExit`. Keep a persistent counter file (e.g. <repo>/state/sent_count_YYYY-MM-DD.json, updated per send) and abort when the day's cumulative total would exceed 40. Raise the sleep to 4-8s with jitter so code matches the documented pacing."
+            },
+            {
+              "id": "send-safety-6",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 25,
+              "issue": "`rows = [int(x) for x in args.rows.split(',') if x.strip()]` does not deduplicate. The live workflow requires a human/agent to hand-type ~38 comma-separated numbers; a repeated number is sent twice within the same run, back to back.",
+              "severity": "high",
+              "failure_scenario": "`--rows 1,2,...,23,24,23,25,...` (typo while transcribing the 放行 list) -> row 23 is built and officially sent twice ~5 seconds apart; the second entry overwrites nothing and no check objects. Journalist receives two identical pitches.",
+              "fix": "`deduped = list(dict.fromkeys(rows)); if len(deduped) != len(rows): raise SystemExit('duplicate row numbers in --rows: refusing')`."
+            },
+            {
+              "id": "send-safety-7",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 94,
+              "issue": "A test send can become an official send because 'official' is merely the absence of --test-to (run_brevo_email.py lines 188-193). Worse, the documented CC-test recipe (AGENTS.md lines 94-96, workflows/B-draft-and-send.md lines 59-60) explicitly instructs sending WITHOUT --test-to, relying on the agent to hand-edit the request JSON so `to` = owner and to hand-add the 'TEST - ' prefix. build_request writes the journalist's real address into that same file (build_request.py line 113), so the default content of the file being 'tested' is the real recipient.",
+              "severity": "high",
+              "failure_scenario": "Agent runs a CC test on pitch_05_*.json: adds cc + TEST prefix per the recipe but forgets to replace `to` (which build_request populated with the journalist) -> `bootstrap_runtime.sh --request-file ... --send` delivers a 'TEST - ' email to the real journalist, in official mode, before human review.",
+              "fix": "Add an --official flag to run_brevo_email.py: any --send without --test-to and without --official must verify every to/cc/bcc address ends with an internal allowlist domain (netmind.ai) and refuse otherwise. Have send_batch pass --official. Update the AGENTS.md/B-workflow CC-test recipe to use the new flag semantics."
+            },
+            {
+              "id": "send-safety-8",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 97,
+              "issue": "Row identity is purely positional and never verified — the same latent class as the confirmed fetch_latest A2:I42 bug. build_request maps --row N to draft sheet row N+1 and reads columns A:H, but never asserts the row's own '#' cell (row[0], which it already fetched) equals N; the author name is pulled from a DIFFERENT tab by the same position (LIST_SHEET C{r}, lines 100-104). assemble_emails.py (lines 115-117, 129) only warns on missing verify results and then writes the surviving rows contiguously, so a single missing result shifts every subsequent draft row up by one.",
+              "severity": "high",
+              "failure_scenario": "Next campaign one verify batch's result file is lost -> draft tab data row 17 actually holds outlet #18. `build_request --row 17` builds outlet 18's email body/address but attaches outlet 17's author as the To display name and logs media #17; the messageId is later written back to the wrong sheet row. If send_prep was hand-built from the same shifted tab, the recipient double-check passes.",
+              "fix": "In build_request: `if int(flat(row[0]).strip() or -1) != args.row: raise SystemExit('row identity mismatch')`; fetch the list-tab row A{r}:C{r} and assert its # also equals args.row before using its C column as author. In assemble_emails, make missing rows a hard error (or write blank placeholder rows to preserve positions)."
+            },
+            {
+              "id": "send-safety-9",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 74,
+              "issue": "The link-validation gate added after the hand-inlined-URL incident is bypassable by the incident's natural successor: hand-inlined MARKDOWN links. (a) required[0] is a substring check, so `[here](https://blog.netmind.ai/article/llm-dating-show-part-1-ANYTHING)` passes; (b) `\"[Reuters](\"` / `\"[CNBC](\"` / `\"(more details [here](\"` never inspect the URL, so links to arbitrary/wrong destinations pass; (c) the bare-URL regex `(?<!\\]\\()https?://\\S+` is case-sensitive and scheme-required, so `www.netmind.ai` or `HTTPS://...` in the body sails through unconverted.",
+              "severity": "high",
+              "failure_scenario": "An agent that has learned 'bare URLs get rejected' writes `including [Reuters](https://reuters.com/wrong-or-stale-path) & [CNBC](...)` directly into the sheet's G cell. to_markdown's exact-phrase replace doesn't fire (text already differs), validate_links finds all four required substrings and zero bare URLs, build succeeds, and the journalist gets a 404 or wrong article behind the Reuters anchor.",
+              "fix": "In validate_links, extract all links with `re.findall(r'\\[[^\\]]+\\]\\((https?://[^)]+)\\)', md)` and require the resulting URL multiset to equal exactly the four values of LINKS (no extras, no near-miss prefixes); extend the bare-URL scan with re.IGNORECASE and a `(?<![\\](])\\bwww\\.` pattern."
+            },
+            {
+              "id": "send-safety-10",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 207,
+              "issue": "The J-column write-back is positional-contiguous: results are sorted by row and written as one block J1:J{len(col)}, assuming draft-tab row order exactly equals the surviving list rows. Any list row skipped by the row[0]-is-None guard (line 144-145) or any draft-tab gap compresses the column and shifts every subsequent outlet's 'latest articles' onto the wrong draft row. Same misalignment class as the confirmed A2:I42 truncation on line 141, but silent instead of missing.",
+              "severity": "high",
+              "failure_scenario": "One list row has a blank '#' cell -> 40 J-values are written against 41 draft rows -> outlet #30's RSS titles land in outlet #29's J cell -> the refresh agent 'reads the latest article' from J, rewrites the opener praising another newsletter's piece, apply_refresh writes it back, and the journalist receives praise for an article they never wrote (the known byline-mismatch incident, now mechanized).",
+              "fix": "Write per-row addressed cells: for each r in results, update `J{r['row']+1}` using the row's own # (batch them with individually addressed ranges); replace the A2:I42 constant by reading the sheet's actual row count from metainfo."
+            },
+            {
+              "id": "send-safety-11",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 27,
+              "issue": "/tmp/send_prep.json — the sole cross-check protecting recipients — has no generator script anywhere in the repo (grep shows only consumers), so it is hand-built by the agent, usually from the same draft tab build_request reads: the '二次核对' is circular for any error already in the sheet. It also lives at a fixed machine-global /tmp path with no campaign token, timestamp, or schema check, and macOS periodic cleanup deletes /tmp files not accessed for ~3 days (same for send_log.json, the only messageId record when the sheet write-back is skipped).",
+              "severity": "medium",
+              "failure_scenario": "A stale prep from an earlier session survives at /tmp/send_prep.json; the sheet email for row 9 was corrected by the owner after prep was built -> corrected build vs stale prep mismatch blocks the good send (or, if prep is rebuilt from a corrupted sheet, both sides carry the same wrong address and the check waves it through). Separately, 4 days after a partial campaign, /tmp/send_log.json has been purged and no local record of what was sent remains.",
+              "fix": "Add make_send_prep.py that writes <repo>/state/send_prep.json (gitignored) stamped with sheet_token and created_at; send_batch verifies the stamp matches campaign.json and refuses prep older than 12h. Move the send log to <repo>/state/send_log.jsonl (append-only, per send-safety-3)."
+            },
+            {
+              "id": "send-safety-12",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 43,
+              "issue": "No cross-row duplicate-address check: two different sheet rows carrying the same contact email (one person running two newsletters, or a shared editorial inbox that A-line's domain-dedup missed because the domains differ) each pass their own per-row prep check and both send.",
+              "severity": "medium",
+              "failure_scenario": "Rows 19 and 33 both resolve to hello@samepublisher.com -> the same human receives two near-identical pitches minutes apart -> reads as automated spam, reputational damage with exactly the audience being courted.",
+              "fix": "In send_batch, track a `seen_emails` set (lowercased) across the batch and also against already-sent entries in the persistent log; on a repeat, log status 'duplicate_recipient' and skip instead of sending."
+            },
+            {
+              "id": "send-safety-13",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 99,
+              "issue": "The recipient address from the sheet (flat(row[3]).strip()) is never syntactically validated — no regex, no single-@ check — before being written into the request. A cell containing a human annotation ('nathan@x.com (bounced 7/10)') or two addresses passes build and the prep check (same source), and only fails at the Brevo API mid-batch.",
+              "severity": "low",
+              "failure_scenario": "Colleague annotates the email cell in the sheet -> build succeeds, prep matches (agent built prep from the same cell) -> Brevo returns 400 mid-batch -> row logged send_failed, batch continues; friction plus a confusing 'failed' state that invites the risky manual/hand-crafted retry path.",
+              "fix": "In build_request after stripping: `if not re.fullmatch(r\"[^@\\s]+@[^@\\s]+\\.[^@\\s]+\", email_addr): raise SystemExit(f'row {args.row} 邮箱格式异常: {email_addr!r}')`."
+            },
+            {
+              "id": "send-safety-14",
+              "file": "/Users/yinchenghou/.claude/skills/brevo/scripts/run_brevo_email.py",
+              "line": 317,
+              "issue": "Artifact and secret resolution are cwd-relative: output goes to ./brevo-output/<ts> (default --output-root, line 30/317) and .env.local is loaded from Path.cwd() (line 303). send_batch pins cwd (send_batch.py line 52), but every documented manual invocation (test sends, CC tests per AGENTS.md line 94) inherits whatever cwd the agent happens to be in — the known 'artifacts landed in odd places' incident class has no code-level guard.",
+              "severity": "low",
+              "failure_scenario": "Agent runs the test send from ~/ -> rendered email + send result land in ~/brevo-output/ outside the repo; a later audit of <repo>/brevo-output shows no trace of the test, and a ~/.env.local from another project could silently supply a different BREVO_API_KEY.",
+              "fix": "Default --output-root to an absolute path derived from the request file's directory (request_path.parent / 'brevo-output') instead of cwd, and load .env.local from that same anchor rather than Path.cwd()."
+            }
+          ]
+        },
+        "verify": {
+          "dimension": "send-safety",
+          "confirmed_ids": [
+            "send-safety-1",
+            "send-safety-2",
+            "send-safety-3",
+            "send-safety-4",
+            "send-safety-5",
+            "send-safety-6",
+            "send-safety-7",
+            "send-safety-8",
+            "send-safety-9",
+            "send-safety-10",
+            "send-safety-11",
+            "send-safety-12",
+            "send-safety-13",
+            "send-safety-14"
+          ],
+          "rejected": [],
+          "extra_notes": "Verification evidence and additional observations:\n\nVERIFICATION HIGHLIGHTS\n- send-safety-1/2/3/6: verified directly in /Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py (73 lines total; no lark import, no K/L read, no skip read, no dedup, log written once at line 66). Live /tmp/send_prep.json has 41 entries with skip=true on rows 12/14/28 exactly as claimed; live /tmp/send_log.json shows 38 'sent' entries = rows 1-41 minus 12/14/28. Git commit 71fe410 (\"Add write-then-verify rule after live drill caught a false completion report\") corroborates the documented false-completion incident behind finding 1.\n- send-safety-4: confirmed in run_brevo_email.py — send_email catches only urllib.error.HTTPError (line 262); URLError/TimeoutError propagate to main, nothing is printed to stdout, so send_batch's json.loads('') hits the bare except (lines 60-63) and mislabels an unknown outcome as 'send_failed'.\n- send-safety-9: empirically executed the exact validate_links logic — a wrong-suffix blog URL ([here](...part-1-WRONG-SUFFIX)), arbitrary Reuters/CNBC URLs, bare www.netmind.ai, and HTTPS:// (uppercase) all pass with missing=[] bare=[]. Bypass fully reproduced.\n- send-safety-11: grep confirms no generator for /tmp/send_prep.json anywhere in the repo (only send_batch.py consumes it). The macOS 3-day /tmp purge is real on this machine: /System/Library/LaunchDaemons/com.apple.bsd.dirhelper.plist runs daily at 03:35 with CLEAN_FILES_OLDER_THAN_DAYS=3.\n- send-safety-2 scenario detail checked: notabot.tech does literally resolve to 127.0.0.1 (dead/parked), though the contact email domain autoblocks.ai still has valid Google MX records, so a mistaken send to row 28 would actually deliver to a live inbox — arguably worse than the reviewer stated.\n- send-safety-12: current prep has zero duplicate to_emails (41 unique), so this is a prospective defense-in-depth gap, not a live condition; still a real missing guard in the only send path.\n\nTHINGS THE REVIEWER MISSED\n1. DUPLICATE SCRIPT COPIES: every pipeline script exists twice — the repo root and byte-identical copies under narranexus/skills/media-pitch-workflow-a/scripts/ and media-pitch-workflow-b/scripts/ (diff confirmed IDENTICAL for send_batch.py). The workflow-B skill (and the packaged media-pitch-team.nxbundle under narranexus/bundles/) tells agents to run scripts/send_batch.py etc. Any fix applied only to the root copy leaves the packaged agent team running the unsafe version; fixes must land in both plus a bundle rebuild.\n2. A --dry RUN DESTROYS THE SEND LOG: because line 66 unconditionally overwrites /tmp/send_log.json, running `send_batch.py --rows ... --dry` AFTER a real send (e.g. to re-verify) replaces the only local messageId record with dry_ok entries. This compounds findings 1/3/11 — the recovery-critical artifact can be wiped by the safest-looking command in the toolbox.\n3. Finding-10 nuance (still confirmed): prompts/refresh_opener.md's documented input is fetch_latest.py's row-keyed latest_articles.json (correct alignment), not the J column, so the narrated 'refresh agent reads J' path is one step removed from the canonical flow. But the J write-back exists precisely so humans/agents working from the draft tab see 'latest articles' beside each draft, and the misaligned write silently corrupts that review surface, so the defect and its byline-mismatch consequence stand.\n4. Minor, same file as finding 3: send_batch line 39 regex `written: (\\S+)` would also silently truncate a request-file path containing spaces (build_request --out with a space) before the AttributeError case the reviewer noted.\n5. build_request.py --row has no bounds validation (help says 1-41); --row 0 reads the header row and only fails incidentally via the 'Hi ' check; nothing prevents a --row beyond the sheet's data range from producing an IndexError mid-batch, which feeds finding 3's crash-loses-log behavior.\n6. send_batch's recipient double-check (line 43) compares ONLY the to_email string; media name, subject, and body are never cross-checked against prep, so a row shift (finding 8) where two adjacent outlets share nothing but a correctly-shifted email column passes silently — the prep fields media/author/opener already exist in /tmp/send_prep.json and could be checked at zero cost."
+        }
+      },
+      {
+        "dimension": "data-integrity",
+        "review": {
+          "dimension": "lark-sheet-data-contracts",
+          "findings": [
+            {
+              "id": "data-integrity-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/apply_refresh.py",
+              "line": 52,
+              "issue": "apply_refresh addresses the draft tab purely positionally (`row_idx = it[\"row\"] + 1`) and never verifies the target row's identity, even though the input JSON carries `media` and the sheet row carries # (col A) and 媒体 (col B). No guard exists anywhere on this path.",
+              "severity": "critical",
+              "failure_scenario": "Draft tab rows and # values diverge (a verify batch omitted one row so assemble compressed the tab, or a colleague deleted/sorted a row in the Lark UI). apply_refresh for row 12 then reads sheet row 13 which actually holds outlet #13: it keeps #13's greeting and splices in the opener written for #12's latest article. The email is later sent, so journalist #13 receives praise for an article they never wrote — the exact byline-mismatch incident class, produced silently by the write-back script itself.",
+              "fix": "Read A:H (not G:H) for the row, and abort the row unless flat(row[0]) == str(it[\"row\"]) AND flat(row[1]) == it[\"media\"] (exact or normalized match). Print the mismatch and require manual resolution instead of writing."
+            },
+            {
+              "id": "dup-send-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 29,
+              "issue": "send_batch has no already-sent guard: it never reads the draft tab K column (messageId), never consults previous /tmp/send_log.json, and does not even dedupe its own --rows argument. The 已发送 state exists only on paper.",
+              "severity": "critical",
+              "failure_scenario": "A batch of 38 partially fails at row 20 (or the operator re-runs `--rows 1,2,...` after an ambiguous crash, or types `--rows 3,3`). Rows 1-19 are sent again — duplicate pitches land in journalists' inboxes, the precise sender-reputation damage the owner mandated zero of. Nothing in the pipeline can stop it because K is only written manually after the fact.",
+              "fix": "Before sending row N, read draft K{N+1}; if non-empty (and not a TEST-prefixed value), skip with status 'already_sent'. Also dedupe `rows = list(dict.fromkeys(rows))` and refuse rows appearing in the current /tmp/send_log.json with status 'sent'."
+            },
+            {
+              "id": "review-gate-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 51,
+              "issue": "Neither send_batch nor build_request reads the draft tab I column 决定(发/不发). The human review gate (stage 6) is enforced only by the agent correctly transcribing the decision list into --rows — and this team's error history includes agents bypassing canonical flows.",
+              "severity": "critical",
+              "failure_scenario": "A colleague marks row 17 不发 in the draft tab (e.g. outlet turned out dormant). The B agent, working from an older summary or a typo'd --rows list, includes 17. build_request builds it (no check), the email address matches send_prep (the veto doesn't change the address), and the vetoed journalist receives the pitch.",
+              "fix": "In send_batch, before building each row, read draft I{N+1}; proceed only if the cell starts with 发 (and is not already 发+date, combined with the K guard). Anything else → status 'blocked_by_review', row skipped."
+            },
+            {
+              "id": "data-integrity-2",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 97,
+              "issue": "build_request reads draft `A{r}:H{r}` with r = row+1 but never checks that flat(row[0]) equals args.row, and pulls the recipient display name from a DIFFERENT sheet (`LIST_SHEET!C{r}`, lines 100-104) assuming list row r and draft row r describe the same outlet — with no cross-check of media names between the two tabs.",
+              "severity": "high",
+              "failure_scenario": "Draft tab is compressed by one missing row (see data-integrity-4) while the list sheet is intact. `--row 9` reads draft sheet row 10 (outlet #10's email/body) but list C10 (outlet #9's author). The Brevo request pairs outlet #10's address with outlet #9's author name; if send_prep was hand-built from the draft tab, the email-only second check passes and the mispaired mail is sent, and the row-9 K/I write-backs land against the wrong outlet.",
+              "fix": "Read A{r}:H{r} plus LIST A{r}:C{r}; abort unless draft row[0] == args.row, list row[0] == args.row, and draft 媒体 (row[1]) equals list 媒体. Print all three on success so send logs carry identity evidence."
+            },
+            {
+              "id": "data-integrity-3",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 207,
+              "issue": "--write-back writes the J column positionally (`J1:J{len(col)}`, one packed array in list-sheet order) instead of addressing each row by its # value. It assumes the draft tab contains exactly one row per list row in identical order with no gaps.",
+              "severity": "high",
+              "failure_scenario": "The draft tab has 40 rows because assembly skipped missing #7, while the list sheet has 41. The packed J column shifts by one from draft row 8 downward: outlet #8's draft row shows outlet #7's \"latest 3 articles\". The refresh agent (whose input pairs current_opener with J-column articles) rewrites #8's opener to praise #7's article, apply_refresh writes it back, and the wrong-praise email is sent.",
+              "fix": "Write per-row instead of packed: for each result r, update `J{r['row']+1}` individually (or build a sparse array indexed by row number), after verifying draft B{r+1} media matches r['media']. Never write the column as a contiguous block."
+            },
+            {
+              "id": "data-integrity-4",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 115,
+              "issue": "When a verify-agent result row is missing, assemble only prints `!! 缺少行` and continues (lines 115-117), then writes rows compressed with `for n in sorted(results)` — silently breaking the sheet-row = #+1 invariant that build_request, apply_refresh, and fetch_latest --write-back all depend on.",
+              "severity": "high",
+              "failure_scenario": "One sub-agent returns 8 of its 9 rows despite the prompt's \"All rows must appear\". The printed warning scrolls past; the draft tab is written with a one-row gap-compression from that # onward, arming data-integrity-1/2/3 for every subsequent row: refreshes, builds, and K write-backs all hit off-by-one rows.",
+              "fix": "Treat missing rows as fatal (`raise SystemExit`) unless an explicit --allow-missing flag is passed; when allowed, still write a placeholder row (#, 媒体, '缺稿') at the correct position so sheet row = #+1 always holds."
+            },
+            {
+              "id": "state-machine-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 20,
+              "issue": "The charters define the L-column state machine 候选→已核实→已成稿→已发送/剔除, but no script reads or writes L at all: import_outlets' HEADERS stop at column K (11 columns, no 状态 header) and never initialize 候选; grep confirms zero writers of 已核实/已成稿/已发送 in any .py. Every state transition is a freehand cell edit — the exact class that produced the live false-write-back incident.",
+              "severity": "high",
+              "failure_scenario": "A-line imports 12 new outlets; L is blank and there is no L header. The A agent 'forgets' (or falsely reports) setting 已核实. B-line filters on L=已核实, sees nothing, reports 'no work'; or conversely an agent hand-fills L on the wrong rows and B drafts an unverified 候选 outlet, sending a pitch built on an unverified citation.",
+              "fix": "Add \"状态\" as the 12th header in HEADERS[可发送名单] and have to_row append \"候选\"; add a small set_state.py (row, expected-current-state, new-state, with read-back print) that both workflows must use, and have send_batch call it to set 已发送 after each successful send."
+            },
+            {
+              "id": "writeback-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 56,
+              "issue": "messageIds are written only to /tmp/send_log.json; no script writes the draft K column or list L state after sending. AGENTS.md:100 assigns this to the agent as a manual step — the known error history includes exactly this step being skipped (K and L left un-updated).",
+              "severity": "high",
+              "failure_scenario": "Batch sends 38 emails at 18:00; the agent session dies (or the machine reboots, clearing /tmp) before the manual K write-back. The sheet — the declared single source of truth — shows 38 rows as unsent. The next operator, unable to find messageIds, re-runs the batch: 38 duplicate emails.",
+              "fix": "After each successful send inside the loop, immediately write K{row+1} = messageId (and I{row+1} = 发 YYYY-MM-DD) via update_sheet_values, read the cell back, and record read-back success in the log entry. /tmp/send_log.json stays as a secondary artifact only."
+            },
+            {
+              "id": "recipient-check-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 27,
+              "issue": "The 'second check' compares built recipients against /tmp/send_prep.json, but no script produces that file and its schema is documented nowhere — the agent hand-crafts it. README.md:50 claims 收件人取自名单表, yet build_request.py:99 takes the email from draft D. If the agent (naturally) generates prep from the same draft tab, the check is circular and always passes.",
+              "severity": "high",
+              "failure_scenario": "A-line fixes a bounced address in list sheet D after assembly. Draft D still holds the stale address. The agent regenerates send_prep by exporting the draft tab (easiest source), the circular check passes, and the pitch is sent to the dead/wrong mailbox while the sheet says everything matched.",
+              "fix": "Add make_send_prep.py that reads the LIST sheet (D 邮箱 + B 媒体 + # + L 状态) and writes /tmp/send_prep.json; have send_batch refuse to run if the file's declared source is not the list sheet (embed {\"source\": \"list\", \"generated_at\": ...} and check it). Additionally make build_request compare draft D against list D for the row and abort on mismatch."
+            },
+            {
+              "id": "race-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 96,
+              "issue": "Import is a non-atomic read-modify-write: used_rows() computes the last used row, then update_sheet_values PUTs a computed range. discover_media.md explicitly instructs spawning 5-8 parallel agents; the 'merge first' step is advisory only.",
+              "severity": "high",
+              "failure_scenario": "Two discovery sub-agents each run import_outlets concurrently with their own JSON. Both compute used=42 and both PUT starting at row 43: the second write silently overwrites the first batch's rows. Outlets vanish without any error, and both batches report success — silent loss in the source-of-truth list plus duplicated # sequences.",
+              "fix": "Replace the computed-range PUT with Lark's dedicated append API (POST /sheets/v2/spreadsheets/{token}/values_append, insertDataOption), which appends after the last row server-side; or, minimally, re-read the written range after the PUT and abort loudly if the first cell's # doesn't match what was intended."
+            },
+            {
+              "id": "range-cap-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 141,
+              "issue": "load_outlets_from_sheet reads the hardcoded range `A2:I42` — capped at 41 data rows (confirmed live bug: list now has 43+ rows).",
+              "severity": "high",
+              "failure_scenario": "Outlets on rows 43+ never enter latest_articles.json, never get J-column freshness data, and never appear in the refresh input. Their openers go out citing weeks-old articles on send day (the staleness the whole stage exists to prevent), and nobody is warned because the script reports normal coverage for the rows it did see.",
+              "fix": "Read the row count from the tab metainfo (already fetched in the same client) or read a generous range like A2:I1000 and stop at the first row where col A is empty; assert at the end that the number of outlets equals the number of non-empty # cells."
+            },
+            {
+              "id": "batch-count-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 104,
+              "issue": "`for i in range(1, 6)` hardcodes exactly five batch files at fixed shared paths /tmp/result{1..5}.json (and /tmp/media_rows.json) — same latent class as the A2:I42 cap, plus a stale-file hazard in a shared /tmp.",
+              "severity": "high",
+              "failure_scenario": "With 43+ outlets at 8-9 per batch there are now 6 batches: result6.json is silently ignored and those outlets never reach the draft tab (and their absence compresses nothing — they're just missing, later masked as '缺少行' noise). Conversely a 4-batch campaign crashes on FileNotFoundError, or worse picks up a leftover result5.json from the PREVIOUS campaign and assembles last campaign's openers into this campaign's draft tab.",
+              "fix": "Take input files as argv (`assemble_emails.py media_rows.json result*.json`) or glob a campaign-scoped directory (e.g. /tmp/mp-<sheet_token>/result*.json); error if zero files or if any listed file is older than media_rows.json."
+            },
+            {
+              "id": "overwrite-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 171,
+              "issue": "assemble reuses an existing 最终邮件草稿 tab (lines 155-159) and unconditionally overwrites `A1:I{n}` — including column I 决定(发/不发) which it sets to \"\" — and leaves any rows beyond n untouched.",
+              "severity": "high",
+              "failure_scenario": "Re-running assembly after review (e.g. to fix one template line) wipes every colleague-entered 发/不发 decision and every hand-edit in G. And if the new run has 38 rows where the old had 41, sheet rows 40-42 keep the OLD campaign's fully-formed emails with valid addresses: `build_request --row 41` happily builds and, with a stale prep file, sends last campaign's pitch.",
+              "fix": "If the tab exists and A2 is non-empty, require --force; on write, first read existing I column and re-write the preserved decisions instead of \"\"; then blank-fill A:I for old rows beyond the new count (write empty strings up to the previous row count) so no stale sendable rows remain."
+            },
+            {
+              "id": "citation-sync-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/apply_refresh.py",
+              "line": 72,
+              "issue": "A refresh swaps the cited article in the draft G opener (with a note in draft H), but the list sheet's G column 引用作品 (已核实=✓) — the canonical citation record the fact-check stage and A-line audits read — is never updated and still shows the old article as verified.",
+              "severity": "medium",
+              "failure_scenario": "Row 5's opener is refreshed to cite yesterday's post. A pre-send fact-check agent (B charter step 3) or a re-run of verify_and_draft compares the opener against list G, sees a 'wrong' citation, and per verify_and_draft.md step 4 'fixes' the opener back to the stale ✓ article — undoing the refresh, or flagging a false discrepancy minutes before the send window.",
+              "fix": "After updating draft G/H, also write list sheet G{row+1} = \"✓ <cited_title> (<cited_date>) <link>\" (carrying link/date from the refresh JSON), keeping list and draft citation records in lockstep; read both cells back."
+            },
+            {
+              "id": "import-seq-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 100,
+              "issue": "The next # is derived from the used-row COUNT (`start_seq = max(used, 1)`), not from the maximum existing # in column A. # is the primary key every other script uses for --row addressing.",
+              "severity": "medium",
+              "failure_scenario": "A colleague deletes one 剔除'd row in the Lark UI (rows shift up; last # is still 41 but used is now 41 instead of 42). The next import starts numbering at 41, creating two rows with #41 — and simultaneously every row below the deletion violates # = sheetrow-1, so `build_request --row 41` reads a row belonging to a different outlet.",
+              "fix": "Compute start_seq = (max int value seen in column A) + 1; additionally verify the invariant int(A cell)==rowindex-1 for all existing data rows and abort the import with a loud message if it's broken (the sheet needs manual renumbering before anything else runs)."
+            },
+            {
+              "id": "range-cap-2",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 50,
+              "issue": "used_rows scans only `A1:{col}200` (and discards the actual rowCount returned by ensure_tab at line 95), so occupancy beyond row 200 is invisible.",
+              "severity": "medium",
+              "failure_scenario": "Once the cumulative list (or the 已剔除 tab, which grows fastest) exceeds 199 data rows, used_rows returns 200 and the next import PUTs starting at row 201 — silently overwriting existing outlet rows 201+ in the source-of-truth sheet.",
+              "fix": "Use the rowCount from ensure_tab to size the scan (`A1:{col}{rowCount}`), and raise if the last scanned row is non-empty (i.e. the sheet may extend beyond the scanned window)."
+            },
+            {
+              "id": "key-type-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 100,
+              "issue": "by_row is keyed by media_rows.json's raw \"#\" values and results by each agent's \"row\" values with no type normalization; int-vs-str mismatch makes every by_row.get(n, {}) return {}, and sorted() over mixed int/str keys raises TypeError.",
+              "severity": "medium",
+              "failure_scenario": "An agent exports media_rows.json with \"#\": \"1\" (sheet cells often round-trip as strings) while result files use integer rows. Every draft row is written with 邮箱 = \"\" — the only symptom is a scrolled-past '!! 缺少行' line — and downstream build_request produces requests with empty recipients that fail one by one at send time (broken stage on send day).",
+              "fix": "Normalize both sides at load: `by_row = {int(r[\"#\"]): r ...}` and `results[int(it[\"row\"])] = it`; after assembly, assert every out_row has a non-empty, '@'-containing 邮箱 and exit non-zero otherwise."
+            },
+            {
+              "id": "version-enum-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 132,
+              "issue": "`BODY_AI if it[\"version\"] == \"AI\" else BODY_LIFESTYLE` silently maps any unexpected spelling (\"ai\", \"AI版\", \"Ai\") to the lifestyle body instead of failing.",
+              "severity": "medium",
+              "failure_scenario": "A verify agent writes version \"ai\" for a technical outlet. The draft silently gets the lifestyle body while the opener was written under AI-version rules (no transition sentence, relies on the body's 'We also recently ran an experiment' first line) — the sent email reads disjointed and loses the experiment framing, and refresh-stage version routing (apply_refresh markers still match) hides the error forever.",
+              "fix": "Validate: `if it[\"version\"] not in (\"AI\", \"lifestyle\"): raise SystemExit(f\"row {n}: bad version {it['version']!r}\")`."
+            },
+            {
+              "id": "link-gate-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 80,
+              "issue": "The bare-URL gate regex `(?<!\\]\\()https?://\\S+` only catches scheme-prefixed URLs. Empirically verified: a body containing `www.example.com` or `blog.netmind.ai/foo` returns bare=[] and passes the gate — the exact hand-inlined-URL failure the gate was built after.",
+              "severity": "medium",
+              "failure_scenario": "An agent hand-writes 'loved your piece at www.thegradient.pub/xyz' in the opener. validate_links passes, Brevo renders it as literal bare text (or an auto-linked naked URL), and the journalist sees the unpolished URL the canonical-template rule exists to prevent.",
+              "fix": "Extend the bare pattern to `(?<!\\]\\()(?:https?://|www\\.)\\S+` and add a second scan for domain-like tokens (`\\b[a-z0-9-]+\\.(?:com|ai|io|net|org|pub|substack\\.com)/\\S+`) outside `](...)` contexts; keep failure fatal as today."
+            },
+            {
+              "id": "k-convention-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 100,
+              "issue": "K is defined only as 'K 列 = messageId'. Test sends (bootstrap --test-to, 'TEST - ' subject) also return real messageIds, and the write-then-verify rule (AGENTS.md 1a) actively pushes agents to write cells as proof of work — but no convention anywhere distinguishes a test messageId from an official one in K.",
+              "severity": "medium",
+              "failure_scenario": "During the test round the B agent records the test-send messageId in K as read-back evidence. At official-send time, K is non-empty, so under any 'K non-empty = already sent' reading (including the dedupe guard this audit proposes) the row is skipped and the journalist never receives the pitch — or the opposite reading causes a duplicate.",
+              "fix": "Document and enforce: K holds ONLY official-send messageIds; test messageIds go to the H 备注 column as '[date] TEST mid=...'. If K must carry a test id temporarily, mandate the literal prefix 'TEST:' and make send_batch's K-guard treat 'TEST:'-prefixed cells as unsent while refusing to overwrite un-prefixed ones."
+            },
+            {
+              "id": "config-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 41,
+              "issue": "campaign.json / campaign.example.json define list_sheet and draft_sheet, but every script ignores them: fetch_latest.py:41-42, build_request.py:33-34, apply_refresh.py:33 hardcode \"0jcVvH\"/\"46PiH6\", while assemble_emails.py addresses the draft tab by TITLE instead. Dead config keys plus mixed addressing (id vs title).",
+              "severity": "medium",
+              "failure_scenario": "Campaign 2 is run in the same spreadsheet with new tabs; the operator updates campaign.json's list_sheet/draft_sheet per the example file's documented contract. sheet_token takes effect but the tab constants don't: fetch_latest reads the OLD campaign's list and writes J onto the OLD draft tab, build_request builds last campaign's emails — and for outlets present in both rounds the recipient check passes, so a stale pitch can actually be sent. Meanwhile assemble writes the NEW tab by title, so the two halves of the pipeline operate on different tabs with no error.",
+              "fix": "In all four scripts: `LIST_SHEET = _CAMPAIGN.get(\"list_sheet\") or exit(...)`, `DRAFT_SHEET = _CAMPAIGN.get(\"draft_sheet\") or exit(...)` (no hardcoded fallback), and make assemble_emails resolve the tab by DRAFT_SHEET id (creating it only when the id is absent), so a single campaign.json governs every script and all three copies."
+            },
+            {
+              "id": "send-log-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 30,
+              "issue": "The send log is only written once at the end (line 66); any uncaught exception mid-batch — `prep[n]` KeyError for a row absent from send_prep.json (line 30), or `m.group(1)` AttributeError if build stdout lacks 'written:' (lines 39-41) — aborts the run after real emails have already gone out, and /tmp/send_log.json is never written.",
+              "severity": "high",
+              "failure_scenario": "`--rows 1,2,99` where 99 isn't in send_prep: rows 1 and 2 are sent, then KeyError kills the process. No log file exists, messageIds survive only in scrollback (or not at all under capture_output by a wrapper), K can't be back-filled reliably, and the recovery re-run duplicates rows 1-2.",
+              "fix": "Validate all requested rows against prep keys BEFORE the loop (abort if any missing); wrap the per-row body in try/except appending an 'error' entry; and rewrite /tmp/send_log.json (plus flush the K-column write from writeback-1) after EVERY row, not once at the end."
+            },
+            {
+              "id": "doc-drift-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/prompts/verify_and_draft.md",
+              "line": 48,
+              "issue": "The prompt footer claims assemble_emails performs '邮箱一致性校验' — no such check exists in assemble_emails.py (it blindly copies src.get(\"邮箱\", \"\")). Similarly refresh_opener.md:4 references a '提取脚本' that generates the refresh input, but no such script exists in the repo.",
+              "severity": "low",
+              "failure_scenario": "A B-line agent reads the footer, believes emails were validated at assembly, and skips manual address verification — an empty/mismatched email (see key-type-1) reaches the send stage unchallenged. For refresh, each agent hand-builds the row/opener/J-article pairing ad hoc, re-introducing the exact hand-crafting error class the canonical-script rule bans.",
+              "fix": "Either implement the claimed email check in assemble_emails (non-empty, contains '@', equals list D for that #) and add an extract_refresh_input.py script, or delete both stale claims from the prompts."
+            },
+            {
+              "id": "copy-sync-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/narranexus/skills/media-pitch-workflow-b/scripts/build_request.py",
+              "line": 1,
+              "issue": "All seven scripts plus lib/lark_client.py exist in three hand-synced copies (repo root, skills/*/scripts/, live workspaces). Diff verified they are currently identical, but nothing enforces it — no sync script, checksum test, or symlink.",
+              "severity": "low",
+              "failure_scenario": "The next safety fix (e.g. the K-column dedupe guard) is applied to the repo-root copy only, exactly like the historical link-gate commit pattern. A workspace B agent runs the skill copy of send_batch without the guard and re-sends a batch — the protection exists in git but not in the copy that executes.",
+              "fix": "Replace skill-side copies with a sync step: add a `make sync-skills` (or pre-commit hook) that copies root scripts into narranexus/skills/*/scripts/ and fails the commit on unexpected diffs; have the workflow charters instruct agents to run a one-line checksum comparison before any send-day operation."
+            }
+          ]
+        },
+        "verify": {
+          "dimension": "data-integrity",
+          "confirmed_ids": [
+            "data-integrity-1",
+            "dup-send-1",
+            "review-gate-1",
+            "data-integrity-2",
+            "data-integrity-3",
+            "data-integrity-4",
+            "state-machine-1",
+            "writeback-1",
+            "recipient-check-1",
+            "race-1",
+            "range-cap-1",
+            "batch-count-1",
+            "overwrite-1",
+            "citation-sync-1",
+            "import-seq-1",
+            "range-cap-2",
+            "key-type-1",
+            "version-enum-1",
+            "link-gate-1",
+            "k-convention-1",
+            "config-1",
+            "send-log-1",
+            "doc-drift-1",
+            "copy-sync-1"
+          ],
+          "rejected": [],
+          "extra_notes": "All 24 findings verified against code, call sites, and docs; regex and key-type claims reproduced empirically; range-cap-1's \"live bug\" re-confirmed with a read-only Lark query (list sheet 0jcVvH has 43 data rows; #42/#43 fall outside A2:I42, yet brevo-requests/pitch_42_understanding_ai.json and pitch_43_daniel_miessler.json exist, so those rows were pitched without ever receiving J-column freshness data). Caveats for the caller: (1) the draft tab currently holds 43 rows with # = sheetrow-1 intact, so data-integrity-1/2/3/4 are latent, armed by assemble's gap compression, not currently manifest; (2) race-1's concurrent trigger requires deviating from the documented merge-then-single-import flow, but import_outlets is explicitly designed for repeated incremental appends across batches, so overlapping runs remain realistic and nothing in code guards them; (3) k-convention-1 is a spec gap whose harm is contingent on how K is interpreted (by humans or by the dedupe guard proposed in dup-send-1's fix) — confirmed as a real documentation defect since bootstrap test sends do return genuine messageIds. Items the reviewer missed: (a) the LIST sheet has its own \"决定(发/不发)\" column J (import_outlets HEADERS) distinct from the draft tab's I 决定 — two decision columns, neither read by any script, compounding review-gate-1 ambiguity about which veto is authoritative; (b) fetch_latest.py:152 `int(row[0])` raises ValueError on any non-numeric A cell (e.g. a stray note row), killing the whole freshness run; (c) assemble_emails takes 邮箱 from agent-exported /tmp/media_rows.json rather than reading the list sheet itself — one more hand-crafted hop in the recipient chain that compounds recipient-check-1's circularity; (d) send_batch's prep dict is keyed by raw p[\"row\"], so a send_prep.json with string rows KeyErrors on the first row (same unnormalized-key class as key-type-1); (e) build_request.py:91 help text \"名单行号 1-41\" is already stale at 43 rows; (f) batch-count-1 nuance: 43 outlets can still fit 5 batches of 9, so the 6-batch overflow is not inevitable — but the cross-campaign stale /tmp/result5.json hazard stands regardless; (g) copy-sync-1 verified precisely: 9 skill-side copies are bit-identical today, and there is no Makefile, pre-commit config, or checksum tooling in the repo."
+        }
+      },
+      {
+        "dimension": "docs-and-prompts",
+        "review": {
+          "dimension": "docs-and-prompts",
+          "findings": [
+            {
+              "id": "docs-and-prompts-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/B-draft-and-send.md",
+              "line": 37,
+              "issue": "No doc anywhere (B workflow step 7/8, AGENTS.md 阶段 7) defines duplicate-send prevention or crash recovery: nothing requires checking draft-tab K (messageId) or /tmp/send_log.json before running or RE-running send_batch.py, and send_batch.py itself has no already-sent guard.",
+              "severity": "critical",
+              "failure_scenario": "send_batch.py --rows 1..38 dies after 20 sends (network drop, laptop sleep) or B crashes between a send and the K-column write-back. The agent, following the only instruction it has ('拿到放行指令后 send_batch.py --rows ...'), re-runs the same row list or re-claims the still-'已核实' row → the same journalists receive the identical pitch twice, burning sender reputation.",
+              "fix": "Add to B-draft-and-send.md step 7 and AGENTS.md 阶段 7.3 (and the skill copy narranexus/skills/media-pitch-workflow-b/references/B-draft-and-send.md): '任何发送或重跑前，先读草稿 tab K 列与 /tmp/send_log.json；K 已有 messageId 或 log 中 status=sent 的行绝对不得再次出现在 --rows 里；重跑只传 build_failed/send_failed 行号。' Also note send_batch.py should be given a K-column guard (script fix, separate task)."
+            },
+            {
+              "id": "docs-and-prompts-2",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 97,
+              "issue": "send_batch.py hard-requires /tmp/send_prep.json ({row, to_email, media}, send_batch.py line 27) — the very artifact powering the advertised '内置逐封收件人二次核对' — but the prep file's existence, format, and generation step are documented in zero docs (grep 'send_prep' over *.md returns nothing). The useful --dry mode is also undocumented.",
+              "severity": "high",
+              "failure_scenario": "Agent follows AGENTS.md 阶段 7.3 / B workflow step 7 verbatim: send_batch.py crashes with FileNotFoundError on /tmp/send_prep.json → agent improvises a hand-crafted bootstrap send per row (the exact historic bypass error, no recipient double-check). Worse: a stale /tmp/send_prep.json left from a previous campaign silently validates recipients against the WRONG campaign's expectations, or KeyErrors mid-batch after several real sends.",
+              "fix": "Document the contract in AGENTS.md 阶段 7 and B-draft-and-send.md step 7: '发送前必须当场从草稿 tab 现取 D 列生成 /tmp/send_prep.json（[{row, to_email, media}]，命令示例给出），严禁复用旧文件；先 send_batch.py --rows ... --dry 全绿再正式发。' Replace the vague '先跑一遍结构自检更稳' with the concrete --dry command."
+            },
+            {
+              "id": "docs-and-prompts-3",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 74,
+              "issue": "assemble_emails.py's input contract is undocumented and silently lossy: it reads /tmp/media_rows.json plus exactly /tmp/result1.json../tmp/result5.json (assemble_emails.py lines 99-105, range(1,6)), prints '!! 缺少行' for gaps but keeps writing a row-shifted draft tab. All docs (AGENTS.md 阶段 3.3, B step 4, verify_and_draft.md L48) just say 'python3 assemble_emails.py'.",
+              "severity": "high",
+              "failure_scenario": "43 outlets at 8-9 per batch = 6 sub-agent batches; /tmp/result6.json is silently ignored, or a sub-agent writes its output under a different name. assemble prints '!! 缺少行: [37,38,...]' but still writes the tab with those rows absent, breaking the positional invariant build_request relies on (draft data row = # + 1, build_request.py line 96) → build_request --row 37 silently reads outlet #39's row; bookkeeping (K/L) attaches to the wrong outlet and later 'missing' rows get re-sent to journalists who already received mail.",
+              "fix": "In AGENTS.md 阶段 3 and prompts/verify_and_draft.md 回写 line: document that sub-agent outputs MUST be saved as /tmp/result1..N.json and /tmp/media_rows.json must be exported first; state the invariant '草稿 tab 数据行号 = # + 1，禁止空洞'; make '!! 缺少行 非空 = 硬性停止，补齐后重跑' an explicit rule (and note assemble should sys.exit on missing rows — script fix)."
+            },
+            {
+              "id": "docs-and-prompts-4",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/prompts/verify_and_draft.md",
+              "line": 48,
+              "issue": "Line 48 claims assemble_emails.py performs '邮箱一致性校验' — it does not. The script copies src.get('邮箱','') verbatim (assemble_emails.py line 145) with no format check and no cross-validation that the opener/greeting pairing matches the email address's row.",
+              "severity": "high",
+              "failure_scenario": "A sub-agent returns a JSON item with the wrong 'row' number (off-by-one in its batch slice). The agent trusts the advertised '邮箱一致性校验' to catch pairing errors and skips manual verification → the draft tab silently pairs outlet X's praise opener and greeting with outlet Y's email address; a journalist receives an email praising someone else's work under their own greeting (the historic wrong-author class, now unreviewable because the check was believed to exist).",
+              "fix": "In prompts/verify_and_draft.md (and the skill copy) change line 48 to: '回写: 改 assemble_emails.py 顶部模板后运行（建 tab + 拼装 + 写入；脚本不做邮箱校验——写入后必须逐行抽查 B 列媒体名与 D 列邮箱域名对应、读回证据附汇报）', or actually implement the check in the script and keep the claim."
+            },
+            {
+              "id": "docs-and-prompts-5",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/A-list-and-verify.md",
+              "line": 18,
+              "issue": "The readback-after-write / no-false-completion rule (AGENTS.md 1a) exists only in AGENTS.md and B workflow step 9. Workflow A — which also writes the sheet (import_outlets rows, L-column '已核实') — has no readback rule at all, and skill-deployed agents never see AGENTS.md: the .nxbundle workspaces contain only SKILL.md + references + scripts (verified by extracting media-pitch-team.nxbundle), and no skill doc references AGENTS.md.",
+              "severity": "high",
+              "failure_scenario": "Bundle-deployed 媒体名单官 sets L='已核实' via an API call that 400s or targets the wrong range, then reports '已入池 N 家、状态已核实' — the exact 2026-07-13 false-completion incident class, now with zero rule telling it to read back. B line finds no 已核实 rows (silent stall) or a human trusts a false completion report.",
+              "fix": "Copy AGENTS.md rule 1a verbatim into workflows/A-list-and-verify.md (under 置状态, step 4) and into both SKILL.md 铁律 sections: '任何写表操作后必须读回目标单元格并附读回证据（前 50 字），无证据不得报完成'。 Additionally ship AGENTS.md 的硬性安全规则 as a shared reference inside both skills so bundle agents inherit all rules (PII、收发件配置须人拍板等)."
+            },
+            {
+              "id": "docs-and-prompts-6",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/README.md",
+              "line": 70,
+              "issue": "The campaign-switch checklists are stale and contradict the code: README item 3 and AGENTS.md L50 say to edit 'SHEET_TOKEN 与 tab id' constants in four scripts, but SHEET_TOKEN no longer exists as a script constant (all four read campaign.json/MP_SHEET_TOKEN), while campaign.example.json advertises list_sheet/draft_sheet keys that NO script reads (grep confirms; tab ids are still hardcoded: fetch_latest.py L41-42, build_request.py L33-34, apply_refresh.py L33). The checklists also omit apply_refresh.py BODY_MARKERS (L34-37) and prompts/refresh_opener.md's hardcoded dating-show campaign text.",
+              "severity": "high",
+              "failure_scenario": "Next campaign: agent writes new tab ids into campaign.json believing the example file's schema works → all scripts still target '0jcVvH'/'46PiH6' on the new spreadsheet (API 400s, or silently the right ids if the sheet was copied — reading last campaign's structure). Even if tabs are fixed, apply_refresh's old BODY_MARKERS match nothing → every refresh row prints '找不到正文标志句，跳过' and stale openers are sent; refresh_opener.md still instructs the old body-first-line constraints, producing openers that clash with the new body.",
+              "fix": "Rewrite README「换下一个 campaign」and AGENTS.md 阶段 0.2 to match reality: (a) sheet_token 只写 campaign.json/MP_SHEET_TOKEN；(b) tab id 目前硬编码于 fetch_latest/build_request/apply_refresh 顶部（或改脚本消费 campaign.json 的 list_sheet/draft_sheet 后删除该步）；(c) 新增两项：apply_refresh.py BODY_MARKERS 必须改成新正文首句、prompts/refresh_opener.md 的 campaign 描述与 version 首句为硬编码需整段更新。 Remove list_sheet/draft_sheet from campaign.example.json until scripts actually read them."
+            },
+            {
+              "id": "docs-and-prompts-7",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 48,
+              "issue": "Docs instruct agents to edit script constants and prompt placeholders (阶段 0.2) but never mention that every script and workflow doc exists in three hand-synced copies (repo root, narranexus/skills/*/scripts+references, and the packed .nxbundle) nor which copy is authoritative or how to re-sync/rebundle after an edit.",
+              "severity": "high",
+              "failure_scenario": "Agent updates BODY_AI in the root assemble_emails.py for the new campaign (exactly what 阶段 0.2 orders). The skill copy and bundle keep the old dating-show body. The bundle-deployed 写稿发送官 later assembles and sends emails whose body pitches the previous campaign — factually wrong mail to journalists, undetectable by the link gate because the old template still contains the canonical phrases.",
+              "fix": "Add a '副本同步' rule to AGENTS.md 阶段 0 and both SKILL.md: 'repo 根目录为唯一权威副本；改动任何脚本/章程后必须运行 diff -r 校验 narranexus/skills 两份副本一致并重打 .nxbundle（命令给出），diff 非空禁止开工'。"
+            },
+            {
+              "id": "docs-and-prompts-8",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/prompts/verify_and_draft.md",
+              "line": 33,
+              "issue": "The two prompts that actually generate recipient-facing text lack the rules born from the historic opener incidents: verify_and_draft.md has no second-person-voice rule, no paywall-visibility rule, and no per-claim fact-check requirement (those live only in B-draft-and-send.md step 3 / AGENTS.md 2a, which sub-agents never see); refresh_opener.md likewise has no second-person rule and no explicit ban on attributing arguments beyond the visible part of a paywalled piece.",
+              "severity": "high",
+              "failure_scenario": "A stateless sub-agent given only verify_and_draft.md writes 'I love how Jasmine dissects agent workflows' (third person — the exact historic violation) or 'your 30 years of AI writing' (overstated claim), or summarizes a paywalled essay's argument from its teaser. The text lands in opener_final, assemble writes it to the sheet, and the only remaining barrier is the B-line step-3 gate that history shows being skipped.",
+              "fix": "Add to the rule bullets of both prompts (and skill copies): '- Address the recipient ONLY in second person (you/your); naming them in third person is a violation. - Every factual claim (platform, years active, counts, arguments) must be something you saw on their site; if the piece is paywalled, reference only the visible portion and never restate its argument. - List each factual claim with its source phrase in notes.'"
+            },
+            {
+              "id": "docs-and-prompts-9",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 78,
+              "issue": "AGENTS.md 阶段 4+5 and README L38 claim fetch_latest 'RSS 抓每家最新 3 篇' while the script reads a frozen range A2:I42 = rows #1-#41 only (fetch_latest.py L141, the confirmed live bug). No doc encodes a coverage-verification step that would catch this or any future frozen-range regression.",
+              "severity": "high",
+              "failure_scenario": "List sheet now has 43 rows. fetch_latest prints 'RSS 覆盖率 X/41', writes J only for 41 rows, and the agent — told the script covers 每家 — proceeds. Outlets #42-#43 never enter the freshness/refresh stage; their openers cite whatever A found weeks ago, and journalists receive praise for stale articles with no one aware a stage silently skipped them.",
+              "fix": "In AGENTS.md 阶段 4+5.1 and B-draft-and-send.md step 5 add: '运行后必须核对输出 RSS 覆盖率 X/Y 的分母 Y 等于名单表当前最末行号（读表确认），不等则立即停止：脚本读取范围已过期（fetch_latest.py 的 A2:I42），扩大范围后重跑。' (Script fix — dynamic range — tracked separately.)"
+            },
+            {
+              "id": "docs-and-prompts-10",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/prompts/refresh_opener.md",
+              "line": 4,
+              "issue": "refresh_opener.md L4 says the input file is produced by 'fetch_latest.py + 提取脚本', but no extraction script exists anywhere in the repo or skills (grep confirms the phrase appears only in this doc).",
+              "severity": "medium",
+              "failure_scenario": "On refresh day the agent must improvise ad-hoc code to join latest_articles.json (cwd-relative output) with per-row G-column openers — the canonical-script-bypass error class. A miskeyed 'row' in the improvised join makes apply_refresh.py write a new opener into the WRONG row's G cell (apply_refresh keys purely on row+1), so a journalist gets an opener praising another outlet's article.",
+              "fix": "Either add the real extraction script (e.g. make_refresh_input.py) to the repo/skills and name it in refresh_opener.md L4, or inline the exact canonical command in the doc; add 'row 值必须来自草稿 tab A 列读回，不得自行编号'."
+            },
+            {
+              "id": "docs-and-prompts-11",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/B-draft-and-send.md",
+              "line": 18,
+              "issue": "Step 1 says '置为 `已成稿` 前完成下面所有步骤' — but '下面所有步骤' (2-9) includes testing, sending and write-back, contradicting the state machine where 已成稿 precedes 已发送. It is unspecified when L actually flips to 已成稿.",
+              "severity": "medium",
+              "failure_scenario": "Agent literally completes through step 8 before touching L: rows sit at 已核实 with finished drafts. A restarted or parallel B session re-claims those 已核实 rows and re-drafts (wasted work, conflicting G-cell overwrites of colleague edits), and — combined with finding 1 — can re-send rows whose send happened before any state write.",
+              "fix": "Reword step 1 (both copies): '完成步骤 2-4（写开头、事实核查、拼装写入并读回）后立即将名单表 L 列置为 已成稿；步骤 5-8 在 已成稿 状态下进行，发送成功并回写 K 列后才置 已发送。'"
+            },
+            {
+              "id": "docs-and-prompts-12",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/AGENTS.md",
+              "line": 100,
+              "issue": "I-column ownership contradicts itself: 阶段 6 (L87) says the agent 不能代填 the 决定 column, and the state-machine contract in both workflows says 'I 列 决定(人写)', yet 阶段 7.4 (L100) and B step 8 (L38) order the agent to write 'I 列「决定」= 发/不发+日期' after sending.",
+              "severity": "medium",
+              "failure_scenario": "Agent either (a) overwrites the human's 「发/不发」cell with its own value+date — destroying the human decision record and masking a '不发' that was flipped, or (b) refuses to touch I citing 阶段 6, leaving no send date and making the next session unable to tell decided-and-sent from undecided rows.",
+              "fix": "Reword AGENTS.md L100 and B step 8: '发/不发 本身只能由人（或 owner 在对话中的明确放行，agent 代录时须注明出处）写入；发送后 agent 只在原值后追加日期，如 发 → 发 2026-07-13，绝不改变原决定'。 Update the state-machine block in both workflow files to match."
+            },
+            {
+              "id": "docs-and-prompts-13",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/B-draft-and-send.md",
+              "line": 36,
+              "issue": "The test-send command is under-specified: B step 6 shows '`python3 scripts/build_request.py --row N` 构建，`--test-to <owner邮箱> --send` 发测试' — the second fragment names no executable and omits --request-file, reading as build_request.py flags; and '<owner邮箱>' is an unbound placeholder defined in no doc or config (AGENTS.md L94 and SKILL.md B L25 have the same hole).",
+              "severity": "medium",
+              "failure_scenario": "Agent runs 'python3 scripts/build_request.py --row 3 --test-to ... --send' → argparse error → improvises its own Brevo API call for the test (bypass class); or, not knowing the owner address, sends the test to the signature's Shenghui Tao or to marketing@netmind.ai, so the review gate never reaches the actual owner while the agent believes the test step is done.",
+              "fix": "B step 6 (and skill copy): give the full command '~/.claude/skills/brevo/scripts/bootstrap_runtime.sh --request-file brevo-requests/pitch_NN_*.json --test-to <owner邮箱> --send'; add an 'owner_email' key to campaign.json/campaign.example.json and have all docs point to it as the sole source of the test recipient."
+            },
+            {
+              "id": "docs-and-prompts-14",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 71,
+              "issue": "The validate_links gate (build_request.py L71-86) is narrower than the guarantee the docs imply: it enforces only the 4 canonical conversions plus 'no bare http(s) URL'. It passes hand-written markdown links [text](any-url) anywhere in the body/opener, scheme-less bare URLs (www.example.com), literal **bold** (renderer prints raw asterisks per AGENTS.md L93), and em-dashes — and no doc tells drafting agents that openers must contain no links at all.",
+              "severity": "medium",
+              "failure_scenario": "A refresh sub-agent inlines '[your latest essay](https://outlet.com/post?utm=…)' into an opener — the historic hand-inlined-URL class in markdown form — and the gate passes it; a journalist receives an agent-chosen, unvetted link. Or a colleague pastes '**Key Findings**' into a G cell: the gate passes and the sent email shows literal asterisks.",
+              "fix": "Two-part: (a) doc — add to B-draft-and-send.md step 3 and both prompts: '开头/结尾句不得含任何 URL 或 markdown 链接；正文链接仅由 build_request 从模板句式生成'; (b) gate — extend validate_links to also reject `**`, em-dash (—), `www.` bare domains, and any `](http` whose URL is not in LINKS."
+            },
+            {
+              "id": "docs-and-prompts-15",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/B-draft-and-send.md",
+              "line": 40,
+              "issue": "Missing failure-handling instructions for the write/send paths: docs mandate readback (step 9) but never say what to do when readback mismatches (retry? escalate?), what to do with send_failed/build_failed rows in /tmp/send_log.json, or how the agent should record manually-researched freshness for RSS-blocked outlets into J ('不留空白' with no write procedure, AGENTS.md L79).",
+              "severity": "medium",
+              "failure_scenario": "A Lark write returns 200 but readback shows the old value (token-permission mismatch writes to a stale revision). With no prescribed action, one agent silently retries in a loop overwriting colleague edits, another reports failure and stops the whole batch mid-send day; send_failed rows are handled ad hoc, feeding the duplicate-send hole of finding 1.",
+              "fix": "Add a 故障处理 subsection to B-draft-and-send.md (and AGENTS.md 故障速查): '读回不一致 → 最多重试 1 次，仍不一致停止并报告 API 返回原文，禁止循环重写；send_log 出现 *_failed → 汇报行号等指令，重发前执行 K 列检查（见重发规则）；无 RSS 行 → 手工把 [日期] 标题 URL 写入该行 J 列并读回。'"
+            },
+            {
+              "id": "docs-and-prompts-16",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 91,
+              "issue": "Agent-facing --help text hardcodes the first campaign's row count: help=\"名单行号 1-41\" — the same frozen-range class as the A2:I42 bug, now stale (sheet has 43+ rows).",
+              "severity": "low",
+              "failure_scenario": "An agent asked to build row 43 reads --help, concludes rows above 41 are unsupported/out of contract, and either skips the outlet or hand-crafts the request JSON outside the canonical script (historic bypass class).",
+              "fix": "Change the help string in all three copies to a campaign-neutral description: help='名单行号（草稿 tab # 列的值）', and drop numeric bounds from any doc text."
+            },
+            {
+              "id": "docs-and-prompts-17",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 23,
+              "issue": "The list sheet created by import_outlets carries its own '决定(发/不发)' header (column J of 可发送名单), while all workflow docs place the human decision in the DRAFT tab's I column — two identically named decision columns on two tabs, with no doc warning that the list-sheet one is unused; the list sheet's 11-column header also has no L「状态」header even though the whole state machine lives in L.",
+              "severity": "low",
+              "failure_scenario": "A colleague (or an agent summarizing pending approvals per 阶段 6) fills/reads 决定 on the list sheet instead of the draft tab; B reads draft-tab I, sees blanks, and rows the human approved are never sent — or 催办 reports claim nothing is decided when everything is.",
+              "fix": "Rename the list-sheet header in import_outlets.py to '（弃用）决定见草稿tab' or remove it, add a 12th header 「状态」 for column L, and add one line to AGENTS.md 阶段 6: '决定只认草稿 tab I 列；名单表同名列一律无效'。 Apply to all three script copies."
+            }
+          ]
+        },
+        "verify": {
+          "dimension": "docs-and-prompts",
+          "confirmed_ids": [
+            "docs-and-prompts-1",
+            "docs-and-prompts-2",
+            "docs-and-prompts-3",
+            "docs-and-prompts-4",
+            "docs-and-prompts-5",
+            "docs-and-prompts-6",
+            "docs-and-prompts-7",
+            "docs-and-prompts-8",
+            "docs-and-prompts-9",
+            "docs-and-prompts-10",
+            "docs-and-prompts-11",
+            "docs-and-prompts-12",
+            "docs-and-prompts-13",
+            "docs-and-prompts-14",
+            "docs-and-prompts-15",
+            "docs-and-prompts-16",
+            "docs-and-prompts-17"
+          ],
+          "rejected": [],
+          "extra_notes": "All claims re-verified in the files. Key verification evidence and things the reviewer missed:\n\nFINDING 1 IS WORSE THAN REPORTED: /Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py writes /tmp/send_log.json only AFTER the entire loop completes (line 66, outside the for loop). A mid-batch crash therefore loses ALL send records including messageIds — even an agent diligently checking send_log.json before a re-run would find nothing (or a stale previous run's log). Per-row stdout is the only record. Any fix doc should also require the script to append the log per-row (or the agent to capture stdout), otherwise the prescribed 'check send_log before re-run' step is unreliable in exactly the crash case it exists for.\n\nFINDING 2 NUANCE: send_batch.py's own docstring (lines 4-6) does mention '/tmp/send_prep.json' and '[--dry]', so the mechanism is discoverable by reading source. The confirmed gap is that no .md doc mentions them (grep verified: 'send_prep' appears only in the two send_batch.py copies) and, critically, NOTHING anywhere describes how to generate send_prep.json or its schema — that is only inferable from code. Also, a missing row in send_prep raises KeyError at `expect = prep[n]` (line 30) which aborts the run mid-batch after earlier rows already sent, compounding finding 1's lost-log problem.\n\nFINDING 3 ROOT ENABLER: build_request.py never verifies that the draft row's A-column '#' value equals --row (it reads row[1],[2],[3],[6] positionally from A{row+1}:H{row+1}, line 97-99) — that is what makes the row-shift silent. It additionally pulls the author name from LIST_SHEET C{row+1} (line 101), assuming the list tab and draft tab share exact row alignment — another undocumented cross-tab invariant no doc states. A cheap doc+script fix is to have build_request assert flat(row[0]) == str(args.row).\n\nFINDING 7 NUANCE: the .nxbundle is a derived artifact — narranexus/build_nxbundle.py packs from SKILLS_SRC = narranexus/skills (verified in source). So there are two hand-synced source copies plus one generated bundle; the fix should say 'sync root → narranexus/skills, then re-run build_nxbundle.py', not hand-sync three copies. Currently diff -r shows root and skill copies ARE in sync, so the finding is a missing-process defect, not a live divergence.\n\nFINDING 9 LIVE EVIDENCE: brevo-requests/ contains pitch_42_understanding_ai.json and pitch_43_daniel_miessler.json, proving draft rows 42-43 already exist while fetch_latest.py reads A2:I42 (rows 1-41 only) — the frozen range is a confirmed live discrepancy today, not hypothetical. Also fetch_latest --write-back writes J1:J{len} positionally, so rows 42-43's J cells are silently never written, directly violating AGENTS.md's '不留空白'.\n\nFINDING 13 NUANCE: AGENTS.md line 94 DOES give the full test command (bootstrap_runtime.sh --request-file <req.json> --test-to <owner邮箱> --send), so the missing-executable/missing---request-file defect applies to workflows/B-draft-and-send.md step 6 and the B SKILL.md quick index — which are exactly the only docs bundle-deployed agents see (finding 5 confirmed the bundle has no AGENTS.md). The unbound <owner邮箱> placeholder is confirmed everywhere: grep shows it in 4 doc locations and campaign.json/campaign.example.json have no owner_email key.\n\nFINDING 6 PRECISION: SHEET_TOKEN still exists as a module-level variable in all four scripts but is derived from MP_SHEET_TOKEN env / campaign.json 'sheet_token' (grep verified), i.e., not a hand-editable constant as README item 3 / AGENTS.md L50 imply. Also assemble_emails.py has NO tab id at all (it creates/reuses by title '最终邮件草稿'), so '四个脚本的 tab id' is wrong for it in the opposite direction. grep confirms no .py reads campaign.json's list_sheet/draft_sheet keys.\n\nCORROBORATION OF HISTORIC-INCIDENT FRAMING: git log confirms the incident lineage the reviewer leaned on — 71fe410 'Add write-then-verify rule after live drill caught a false completion report', cd507f6 'Mandate per-claim fact-check before any send', 5b57078 'paywalled sources may only be cited from visible content', 3a4f6f8 'Link-validation gate'. Each of those hardening commits patched AGENTS.md/B-workflow only, never the prompts/ templates or A-workflow — which is exactly the propagation gap findings 5 and 8 describe.\n\nMINOR EXTRAS THE REVIEWER MISSED: (a) assemble_emails.py writes only a 9-column header (A-I); the J/K columns referenced by the state machine and fetch_latest/send flows never get headers from any script except J via fetch_latest --write-back — K 'messageId' header exists nowhere. (b) verify_and_draft.md's output contract has sub-agents self-assign nothing — 'row' comes back from the sub-agent unchecked, and assemble trusts it as the join key AND the sheet position; combined with finding 3/4 this is the single highest-leverage place to add 'row must be echoed from input, never renumbered'. (c) refresh_opener.md tells agents latest_articles comes 'from RSS today' but fetch_latest writes its output to cwd-relative latest_articles.json while docs never state the cwd, so repeated runs from different directories silently produce divergent input files."
+        }
+      },
+      {
+        "dimension": "bundle-and-env",
+        "review": {
+          "dimension": "packaging-environment-and-credentials",
+          "findings": [
+            {
+              "id": "bundle-and-env-1",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py",
+              "line": 51,
+              "issue": "Canonical sender has no duplicate-send guard and loses its log on mid-batch crash: nothing checks the draft tab K (messageId) or list L (state) before sending; /tmp/send_log.json is written only once at line 66 after the whole loop; prep[n] (line 30) raises KeyError and m.group(1) (line 40) raises AttributeError mid-batch; the script also never writes K/L back (SKILL.md line 27 and workflows/B-draft-and-send.md line 38 delegate that to the agent, the exact step that was falsely reported as done in live operation).",
+              "severity": "critical",
+              "failure_scenario": "Operator runs --rows 1,2,999 (typo) or re-runs a batch after an unclear failure: rows 1-2 are sent, KeyError on 999 aborts before the log is written, messageIds are lost, K/L were never updated by the script, so the re-run sends rows 1-2 again — duplicate emails to real journalists. Equally, re-running the same --rows list at any time re-sends every row because no state is consulted.",
+              "fix": "In send_batch.py: (a) before sending row n, read draft K{n+1} and list L{n+1} and skip with status 'already_sent' if K is non-empty or L=='已发送'; (b) append each row's result to /tmp/send_log.json (JSONL, flush per row) instead of one write at the end; (c) after a 201, have the script itself write K{n+1}=messageId and list L{n+1}='已发送' and read both cells back, logging the read-back value; (d) wrap prep lookup and regex in explicit checks that log and continue instead of raising."
+            },
+            {
+              "id": "bundle-and-env-2",
+              "file": "/Users/yinchenghou/.nexusagent/workspaces/Haili/agent_013b2c4ac6c8/skills/media-pitch-workflow-b/scripts/build_request.py",
+              "line": 19,
+              "issue": "Live agent workspaces run drifted, half-synced scripts: fetch_latest.py in BOTH workspaces (line 27), build_request.py (line 19) and apply_refresh.py (line 19) in the Draft&Send workspace still hardcode the real sheet token J2ugs82zzhRpZ7trJKujnpu9pwd and lack the _campaign_cfg/MP_SHEET_TOKEN resolution; workspace build_request.py contains the link-validation gate from commit 3a4f6f8 but not that commit's sanitization — a half-applied hand-sync. assemble_emails.py/send_batch.py/import_outlets.py/lark_client.py and all SKILL.md/references are in sync. (Repo root vs both narranexus/skills copies: byte-identical, verified with diff.)",
+              "severity": "high",
+              "failure_scenario": "Any future fix committed to the repo (e.g. the A2:I42 range fix, a new validation gate) does not reach the live agents — they keep sending with old logic; rotating the campaign by editing workspace campaign.json silently does nothing for these 4 scripts, which keep reading/writing the OLD spreadsheet (silent wrong-sheet writes); and an agent copying its workspace scripts back toward the repo re-introduces the hardcoded token into git.",
+              "fix": "Overwrite the 4 drifted workspace files with the repo-root versions now (cp from /Users/yinchenghou/Desktop/media-pitch-pipeline/{fetch_latest,build_request,apply_refresh}.py into both workspaces' scripts/), verify with diff -r, and replace hand-sync with a single command: a sync_workspaces.sh that rsyncs repo-root scripts into narranexus/skills/*/scripts and into ~/.nexusagent/workspaces/Haili/agent_*/skills/*/scripts, run after every commit (or make agents re-install the rebuilt bundle instead of patching in place)."
+            },
+            {
+              "id": "bundle-and-env-3",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 141,
+              "issue": "Hardcoded range A2:I42 in ALL FIVE copies (repo root:141, narranexus skills A and B copies:141, both live workspaces:128) caps the freshness stage at list row 41 while the sheet already has 43+ rows (confirmed live); build_request.py:91 help text still says '名单行号 1-41'.",
+              "severity": "high",
+              "failure_scenario": "New outlets on rows 42+ are silently excluded from fetch_latest --from-sheet: their J column never gets the latest-article data, the refresh stage never flags their openers as stale, and a journalist added last week receives an opener praising an article that is no longer their latest — the exact wrong-praise class already seen live.",
+              "fix": "In load_outlets_from_sheet(), stop hardcoding the end row: fetch the tab's rowCount from the metainfo endpoint (as import_outlets.ensure_tab already does) and request A2:I{rowCount}, or read a generous open block (A2:I500) and break at the first row where flat(row[0]).strip()=='' ; print the count read so under-reads are visible. Apply to all copies via the bundle-and-env-2 sync, and fix build_request.py:91 help text."
+            },
+            {
+              "id": "bundle-and-env-4",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py",
+              "line": 171,
+              "issue": "Re-running assemble_emails.py destroys human state and desynchronizes the draft tab: it overwrites A1:I{n} of the existing tab, writing '' into every I (决定) cell — wiping colleagues' send/no-send decisions — and regenerating G bodies over apply_refresh output and hand edits; rows missing from /tmp/result{1..5}.json (range hardcoded at line 104, a 6th batch file is silently ignored) only print a warning (line 117) but the write proceeds with the survivors compacted upward, and stale rows from a longer previous run remain below the new data.",
+              "severity": "high",
+              "failure_scenario": "Second assemble run after colleagues reviewed: all 决定 cells are blanked (loss of the human approval record); or one /tmp/result batch is missing row 17, rows 18+ shift up one physical row, stale row 43 from the previous run survives at the bottom — build_request --row 43 then builds and send_batch sends that stale previous-batch email to a journalist.",
+              "fix": "Before writing: read the existing tab, refuse to proceed (SystemExit) if any I cell is non-empty unless --force; assert sorted(results) is exactly 1..N contiguous and matches by_row keys (hard exit on 'missing', not a print); discover result files with glob('/tmp/result*.json') instead of range(1,6); after writing, clear (write '') any old rows between len(out_rows)+1 and the previous data extent."
+            },
+            {
+              "id": "bundle-and-env-5",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 97,
+              "issue": "build_request trusts --row as a physical offset with zero identity verification: it never checks that the draft row's own '#' cell (column A, already inside the A{r}:H{r} read) equals args.row, and never cross-checks the draft email (D) or media (B) against the list tab even though it already queries the list tab for the author name (line 101). Live evidence of unverified row identity: the Draft&Send workspace contains the identical Understanding-AI request saved as both scripts/brevo-requests/pitch_01_understanding_ai.json and brevo-requests/pitch_42_understanding_ai.json.",
+              "severity": "high",
+              "failure_scenario": "Draft tab and list tab misalign by one row (via bundle-and-env-4 compaction, a colleague deleting a row, or a --row typo): build_request silently builds row N's email with row M's To:-name from the list tab (journalist sees someone else's name on the envelope), send_batch's prep check passes because /tmp/send_prep.json was generated from the same shifted sheet, and the K/L write-backs land on the wrong row.",
+              "fix": "In main(): read A{r}:H{r} (it already does) and add: sheet_no = int(flat(row[0]).strip()); if sheet_no != args.row: raise SystemExit(f'row mismatch: sheet #{sheet_no} != --row {args.row}'). Also read list B{r} and D{r} and require list-media == draft-media and list-email.lower() == draft-email.lower(), exiting on mismatch."
+            },
+            {
+              "id": "bundle-and-env-6",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 73,
+              "issue": "The validate_links gate added after the hand-inlined-URL incident is bypassable: only the blog link is URL-pinned ('[here]('+LINKS['blog']); the other three required patterns ('(more details [here](', '[Reuters](', '[CNBC](') match ANY URL, and the bare-URL regex (?<!\\]\\()https?://\\S+ excludes anything in markdown-link form. Verified by reproduction: a draft body with hand-written [Reuters](https://EVIL.example.com/r), [CNBC](wrong), (more details [here](wrong)) passes with missing=[] bare=[].",
+              "severity": "high",
+              "failure_scenario": "An agent again hand-inlines links in the sheet body but this time in markdown form (the natural 'fix' after the gate rejects bare URLs): to_markdown's exact-phrase replacements never fire because the template phrases are altered, yet validate_links passes, and journalists receive an email whose Reuters/CNBC/research links point at wrong or dead URLs.",
+              "fix": "Pin all four required strings to full URLs: required = [f\"[here]({LINKS['blog']})\", f\"(more details [here]({LINKS['more_details']}))\", f\"[Reuters]({LINKS['reuters']})\", f\"[CNBC]({LINKS['cnbc']})\"]; additionally allowlist every markdown link: unknown = [u for u in re.findall(r'\\]\\((https?://[^)]+)\\)', md) if u not in LINKS.values()] and fail if unknown is non-empty."
+            },
+            {
+              "id": "bundle-and-env-7",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/build_request.py",
+              "line": 30,
+              "issue": "Token resolution order contradicts its own documentation in all four scripts (build_request.py:30, fetch_latest.py:38, apply_refresh.py:30, assemble_emails.py:20 and all narranexus copies): code is env-first (os.environ.get('MP_SHEET_TOKEN') or campaign.json) while every docstring says 'campaign.json 优先，其次 MP_SHEET_TOKEN'; campaign.json's list_sheet/draft_sheet keys are read by NO script (grep confirms) while tab IDs stay hardcoded (DRAFT_SHEET='46PiH6', LIST_SHEET='0jcVvH'); and README.md '换下一个 campaign' item 3 plus AGENTS.md 阶段0 step 2 still instruct editing SHEET_TOKEN constants that no longer exist in the scripts.",
+              "severity": "high",
+              "failure_scenario": "Next campaign: operator sets up a new sheet, updates campaign.json fully (token + tab ids) trusting the config file — scripts ignore list_sheet/draft_sheet and target tab ids from the old campaign; if the team reused the same spreadsheet (README suggests 复制上一轮的), the old tabs still exist and scripts silently read/write LAST campaign's drafts, building outdated emails; separately, a stale MP_SHEET_TOKEN exported in some shell silently overrides the fresh campaign.json, sending writes to the previous sheet. The stale README/AGENTS guidance also invites hand-editing scripts to re-hardcode tokens — exactly how the workspace copies drifted.",
+              "fix": "Make code match docs: SHEET_TOKEN = _CAMPAIGN.get('sheet_token') or os.environ.get('MP_SHEET_TOKEN',''); replace the hardcoded tab constants with LIST_SHEET=_CAMPAIGN.get('list_sheet','0jcVvH') / DRAFT_SHEET=_CAMPAIGN.get('draft_sheet','46PiH6') in all four scripts; rewrite README '换 campaign' item 3 and AGENTS.md 阶段0 step 2 to say 'edit campaign.json (token + tab ids); scripts contain no tokens'."
+            },
+            {
+              "id": "bundle-and-env-8",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/narranexus/build_nxbundle.py",
+              "line": 158,
+              "issue": "The bundle builder zips/tars everything under narranexus/skills/<skill> recursively (_zip_skill line 158, _tar_workspace line 165) with no exclusion list, stamps contains_secrets: False unconditionally (line 232), and the output bundles/media-pitch-team.nxbundle is git-tracked; meanwhile the skills' scripts and references are byte-identical to repo-root files, so the parallel copies it packages exist only to be hand-synced (the current bundle and all 6 historical blobs are clean — verified by extracting each and grepping for the token).",
+              "severity": "high",
+              "failure_scenario": "Someone tests the skill layout in-repo by dropping campaign.json (the documented workspace convention — LOCAL_ENV.md says the token lives at skill root) or lets __pycache__/.lark_tokens.json/brevo-output appear under narranexus/skills/media-pitch-workflow-b/, then reruns build_nxbundle.py: the real sheet token / OAuth refresh token / journalist-PII artifacts are embedded inside workspace.tar.gz within a git-tracked bundle whose manifest claims contains_secrets: False, and the next push publishes them.",
+              "fix": "Build skill dirs in the tempdir from canonical sources instead of parallel copies: copy scripts from HERE.parent (repo root fetch_latest.py/import_outlets.py/... per a per-skill file list), references from workflows/ and prompts/, SKILL.md from narranexus/; add an explicit denylist (campaign.json, lark_config.json, .lark_tokens.json, *.env*, __pycache__, *.pyc, brevo-output, brevo-requests, .DS_Store) enforced inside _zip_skill/_tar_workspace with a hard build failure (not skip) when a denylisted file is encountered; then delete narranexus/skills/*/scripts and */references from git."
+            },
+            {
+              "id": "bundle-and-env-9",
+              "file": "/Users/yinchenghou/.nexusagent/workspaces/Haili/agent_013b2c4ac6c8/skills/media-pitch-workflow-b/LOCAL_ENV.md",
+              "line": 11,
+              "issue": "The env bootstrap knowledge is unmanaged: LOCAL_ENV.md exists only in the two live workspaces (hand-added; not in repo skills, not in the bundle — verified by listing the extracted bundle), so a fresh bundle import reproduces agents with no env instructions and no campaign.json; its guidance is accurate for GUI reality (~/.zshenv exports LARK_CONFIG/LARK_TOKEN_CACHE and sources brevo.env, which GUI-launched NarraNexus does not inherit; without env every Lark script fails and lib/lark_client.py:_load_config additionally writes a lark_config.json template into cwd), but its line 11 claim 'sheet token 已在本目录 campaign.json，脚本自动读取' is currently FALSE for the 4 drifted hardcoded workspace scripts (bundle-and-env-2).",
+              "severity": "medium",
+              "failure_scenario": "Bundle imported on a new machine or agents recreated: first runs fail with missing Lark config; per demonstrated past behavior, the agent improvises — hunting tokens from other scripts ('TOKEN 已从 assemble_emails.py 找到' in the live session log) or hardcoding them — recreating the drift/leak pattern instead of failing into a documented setup path.",
+              "fix": "Add LOCAL_ENV.md (env-prefix command, brevo.env sourcing, campaign.json provisioning step referencing campaign.example.json) to narranexus/skills/media-pitch-workflow-{a,b}/ so build_nxbundle packages it, and reference it from both SKILL.md 环境要求 sections; after fixing bundle-and-env-2, the '脚本自动读取 campaign.json' sentence becomes true — until then correct it in both workspace files."
+            },
+            {
+              "id": "bundle-and-env-10",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/.gitignore",
+              "line": 1,
+              "issue": "gitignore misses the agent-produced intermediate files the workflows tell agents to create in the repo: merged.json (AGENTS.md 阶段1 step 4 and workflow A step 3 — contains journalist emails/PII), latest_articles.json (fetch_latest default --out, written to cwd), and per-outlet JSONs like understanding_ai.json (seen in the live List-agent workspace). Covered items were verified: campaign.json is ignored and untracked, brevo-output/ and brevo-requests/ patterns match at any depth, lark_config.json/.lark_tokens.json/.env* are ignored, and full git history is clean of tokens/keys/PII.",
+              "severity": "medium",
+              "failure_scenario": "An agent follows AGENTS.md literally from the repo root, writes merged.json with 40 journalists' names+emails+source URLs, and any later 'git add -A && git commit' (agents routinely do this) publishes journalist PII — directly violating AGENTS.md hard rule 4 (记者邮箱只写入 Lark 表格，不写入 git 仓库).",
+              "fix": "Append to .gitignore: 'merged*.json', 'latest_articles.json', 'outlets*.json', '*.outlets.json' — or better, standardize all intermediates into an ignored 'workdata/' directory and update AGENTS.md/workflow commands to write there."
+            },
+            {
+              "id": "bundle-and-env-11",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 207,
+              "issue": "fetch_latest --write-back writes the J column as a dense, order-sorted block J1:J{len(col)} (lines 195-208): rows whose '#' cell is empty are skipped at read time (line 144-145), and the write assumes draft-tab physical row n+1 corresponds to list row n, so any gap or draft-tab compaction shifts every subsequent J cell onto the wrong outlet.",
+              "severity": "medium",
+              "failure_scenario": "A colleague blanks one outlet's # cell mid-list (or the draft tab is compacted per bundle-and-env-4): every J cell below shifts up one row; the refresh stage reads J for row 30 but gets row 31's latest articles, the agent rewrites the opener citing another outlet's article, and the journalist receives praise for a piece they never wrote — the byline-mismatch incident class, silently.",
+              "fix": "Write each outlet's articles to its keyed position instead of a dense block: for r in results: update J{r['row']+1} individually (or build a sparse col sized to max(row)+1 with '' placeholders for gaps), and after writing, read back J{row+1} for 2-3 sampled rows and verify the media name in the draft row B matches the outlet."
+            },
+            {
+              "id": "bundle-and-env-12",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/fetch_latest.py",
+              "line": 152,
+              "issue": "int(row[0]) is applied to the raw '#' cell without the flat() rich-text normalization used for every other column — the same latent class as the already-fixed flat()-crash-on-int bug, in the opposite direction (rich-text/formatted cell where an int is assumed).",
+              "severity": "medium",
+              "failure_scenario": "A colleague adds formatting, a note, or a link to a '#' cell (Lark then returns a list of segment dicts instead of an int): int(row[0]) raises TypeError and the whole freshness stage crashes on the eve of a send; a '#' cell containing '12 ' as text with stray characters raises ValueError the same way.",
+              "fix": "Change line 152 to row_no = int(float(flat(row[0]).strip())) inside a try that skips-and-reports the row on failure ('!! 行号无法解析: {row[:2]}'), mirroring how flat() is already applied to media and url; sync to all copies."
+            },
+            {
+              "id": "bundle-and-env-13",
+              "file": "/Users/yinchenghou/Desktop/media-pitch-pipeline/import_outlets.py",
+              "line": 50,
+              "issue": "used_rows() scans only A1:{col_end}200 (line 50) and ensure_tab defaults rowCount to 200 (line 39) — the same hardcoded-bound class as the confirmed A2:I42 bug, one growth step away.",
+              "severity": "low",
+              "failure_scenario": "The 可发送名单 tab grows past 200 rows across campaigns: used_rows returns 200, first=201, and the next import writes new outlets over existing rows 201+ (silent overwrite of verified outlets, duplicated '#' numbering) — or fails opaquely if the grid was never expanded past the 200-row default.",
+              "fix": "Use the metainfo the code already fetches: have ensure_tab return the sheet's actual rowCount and scan A1:{col_end}{rowCount}; before writing past rowCount, expand the grid (dimension_range API) or fail with an explicit '表格行数不足' message; assert the target write range was empty by reading it back before the write."
+            }
+          ]
+        },
+        "verify": null
+      }
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Review"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "review:scripts-correctness",
+      "phaseIndex": 1,
+      "phaseTitle": "Review",
+      "agentId": "af42276c9d9848c48",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961033305,
+      "queuedAt": 1783961033295,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "scripts-correctness",
+      "promptPreview": "You are auditing a production email-outreach pipeline where the owner has mandated ZERO errors. Real journalists receive these emails; a duplicate, wrong, or broken email damages the company's sender domain and reputation.\n\nKnown error history from live operation (hunt for SIMILAR latent classes, not just these instances):\n- flat() helper crashed on integer sheet cells (# column returned as int, .…",
+      "lastProgressAt": 1783961498451,
+      "tokens": 61066,
+      "toolCalls": 13,
+      "durationMs": 465146,
+      "resultPreview": "{\"dimension\":\"scripts-correctness\",\"findings\":[{\"id\":\"scripts-correctness-1\",\"file\":\"/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py\",\"line\":141,\"issue\":\"assemble_emails pairs each agent result (greeting/opener/body, keyed by it['row']) with the email address from by_row[n]['邮箱'] but never cross-checks it['media'] against src['媒体'], so a result item carrying a wrong row number i…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "review:send-safety",
+      "phaseIndex": 1,
+      "phaseTitle": "Review",
+      "agentId": "a474ddaa9a0483704",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961033305,
+      "queuedAt": 1783961033296,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "sending-path safety: duplicate / wrong / malformed email re…",
+      "promptPreview": "You are auditing a production email-outreach pipeline where the owner has mandated ZERO errors. Real journalists receive these emails; a duplicate, wrong, or broken email damages the company's sender domain and reputation.\n\nKnown error history from live operation (hunt for SIMILAR latent classes, not just these instances):\n- flat() helper crashed on integer sheet cells (# column returned as int, .…",
+      "lastProgressAt": 1783961601587,
+      "tokens": 90416,
+      "toolCalls": 20,
+      "durationMs": 568282,
+      "resultPreview": "{\"dimension\":\"sending-path safety: duplicate / wrong / malformed email reaching journalists (send_batch.py, build_request.py, brevo bootstrap invocation)\",\"findings\":[{\"id\":\"send-safety-1\",\"file\":\"/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py\",\"line\":51,\"issue\":\"Zero idempotency: send_batch never checks any already-sent signal before firing an official send. It does not read the sh…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "review:data-integrity",
+      "phaseIndex": 1,
+      "phaseTitle": "Review",
+      "agentId": "a5f81dc7bd2bba3f3",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961033306,
+      "queuedAt": 1783961033296,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "lark-sheet-data-contracts",
+      "promptPreview": "You are auditing a production email-outreach pipeline where the owner has mandated ZERO errors. Real journalists receive these emails; a duplicate, wrong, or broken email damages the company's sender domain and reputation.\n\nKnown error history from live operation (hunt for SIMILAR latent classes, not just these instances):\n- flat() helper crashed on integer sheet cells (# column returned as int, .…",
+      "lastProgressAt": 1783961664857,
+      "tokens": 87951,
+      "toolCalls": 22,
+      "durationMs": 631551,
+      "resultPreview": "{\"dimension\":\"lark-sheet-data-contracts\",\"findings\":[{\"id\":\"data-integrity-1\",\"file\":\"/Users/yinchenghou/Desktop/media-pitch-pipeline/apply_refresh.py\",\"line\":52,\"issue\":\"apply_refresh addresses the draft tab purely positionally (`row_idx = it[\\\"row\\\"] + 1`) and never verifies the target row's identity, even though the input JSON carries `media` and the sheet row carries # (col A) and 媒体 (col B). …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "review:docs-and-prompts",
+      "phaseIndex": 1,
+      "phaseTitle": "Review",
+      "agentId": "a9af8fb00a7931fe2",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961033306,
+      "queuedAt": 1783961033296,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "docs-and-prompts",
+      "promptPreview": "You are auditing a production email-outreach pipeline where the owner has mandated ZERO errors. Real journalists receive these emails; a duplicate, wrong, or broken email damages the company's sender domain and reputation.\n\nKnown error history from live operation (hunt for SIMILAR latent classes, not just these instances):\n- flat() helper crashed on integer sheet cells (# column returned as int, .…",
+      "lastProgressAt": 1783961691434,
+      "tokens": 91782,
+      "toolCalls": 27,
+      "durationMs": 658128,
+      "resultPreview": "{\"dimension\":\"docs-and-prompts\",\"findings\":[{\"id\":\"docs-and-prompts-1\",\"file\":\"/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/B-draft-and-send.md\",\"line\":37,\"issue\":\"No doc anywhere (B workflow step 7/8, AGENTS.md 阶段 7) defines duplicate-send prevention or crash recovery: nothing requires checking draft-tab K (messageId) or /tmp/send_log.json before running or RE-running send_batch.py, …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "review:bundle-and-env",
+      "phaseIndex": 1,
+      "phaseTitle": "Review",
+      "agentId": "a9c5768455fa2579c",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961033306,
+      "queuedAt": 1783961033296,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "packaging-environment-and-credentials",
+      "promptPreview": "You are auditing a production email-outreach pipeline where the owner has mandated ZERO errors. Real journalists receive these emails; a duplicate, wrong, or broken email damages the company's sender domain and reputation.\n\nKnown error history from live operation (hunt for SIMILAR latent classes, not just these instances):\n- flat() helper crashed on integer sheet cells (# column returned as int, .…",
+      "lastProgressAt": 1783961952574,
+      "tokens": 140906,
+      "toolCalls": 59,
+      "durationMs": 919268,
+      "resultPreview": "{\"dimension\":\"packaging-environment-and-credentials\",\"findings\":[{\"id\":\"bundle-and-env-1\",\"file\":\"/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py\",\"line\":51,\"issue\":\"Canonical sender has no duplicate-send guard and loses its log on mid-batch crash: nothing checks the draft tab K (messageId) or list L (state) before sending; /tmp/send_log.json is written only once at line 66 after the…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "verify:scripts-correctness",
+      "phaseIndex": 2,
+      "phaseTitle": "Verify",
+      "agentId": "ae50b595ba23d963a",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961498465,
+      "queuedAt": 1783961498454,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "scripts-correctness",
+      "promptPreview": "You are an adversarial verifier. Another reviewer audited /Users/yinchenghou/Desktop/media-pitch-pipeline (dimension: scripts-correctness) and reported these findings:\n\n[\n {\n  \"id\": \"scripts-correctness-1\",\n  \"file\": \"/Users/yinchenghou/Desktop/media-pitch-pipeline/assemble_emails.py\",\n  \"line\": 141,\n  \"issue\": \"assemble_emails pairs each agent result (greeting/opener/body, keyed by it['row']) wit…",
+      "lastProgressAt": 1783961774042,
+      "tokens": 87944,
+      "toolCalls": 22,
+      "durationMs": 275576,
+      "resultPreview": "{\"confirmed_ids\":[\"scripts-correctness-1\",\"scripts-correctness-2\",\"scripts-correctness-3\",\"scripts-correctness-4\",\"scripts-correctness-5\",\"scripts-correctness-6\",\"scripts-correctness-7\",\"scripts-correctness-8\",\"scripts-correctness-9\",\"scripts-correctness-10\",\"scripts-correctness-11\",\"scripts-correctness-12\",\"scripts-correctness-13\",\"scripts-correctness-14\",\"scripts-correctness-15\",\"scripts-correct…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "verify:send-safety",
+      "phaseIndex": 2,
+      "phaseTitle": "Verify",
+      "agentId": "aec3b971cd58e4099",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961601590,
+      "queuedAt": 1783961601589,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "send-safety",
+      "promptPreview": "You are an adversarial verifier. Another reviewer audited /Users/yinchenghou/Desktop/media-pitch-pipeline (dimension: send-safety) and reported these findings:\n\n[\n {\n  \"id\": \"send-safety-1\",\n  \"file\": \"/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py\",\n  \"line\": 51,\n  \"issue\": \"Zero idempotency: send_batch never checks any already-sent signal before firing an official send. It does no…",
+      "lastProgressAt": 1783961923256,
+      "tokens": 80126,
+      "toolCalls": 21,
+      "durationMs": 321665,
+      "resultPreview": "{\"dimension\":\"send-safety\",\"confirmed_ids\":[\"send-safety-1\",\"send-safety-2\",\"send-safety-3\",\"send-safety-4\",\"send-safety-5\",\"send-safety-6\",\"send-safety-7\",\"send-safety-8\",\"send-safety-9\",\"send-safety-10\",\"send-safety-11\",\"send-safety-12\",\"send-safety-13\",\"send-safety-14\"],\"rejected\":[],\"extra_notes\":\"Verification evidence and additional observations:\\n\\nVERIFICATION HIGHLIGHTS\\n- send-safety-1/2/…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "verify:data-integrity",
+      "phaseIndex": 2,
+      "phaseTitle": "Verify",
+      "agentId": "a6e936c6397bf308a",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961664861,
+      "queuedAt": 1783961664859,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "data-integrity",
+      "promptPreview": "You are an adversarial verifier. Another reviewer audited /Users/yinchenghou/Desktop/media-pitch-pipeline (dimension: data-integrity) and reported these findings:\n\n[\n {\n  \"id\": \"data-integrity-1\",\n  \"file\": \"/Users/yinchenghou/Desktop/media-pitch-pipeline/apply_refresh.py\",\n  \"line\": 52,\n  \"issue\": \"apply_refresh addresses the draft tab purely positionally (`row_idx = it[\\\"row\\\"] + 1`) and never v…",
+      "lastProgressAt": 1783961989736,
+      "tokens": 84069,
+      "toolCalls": 22,
+      "durationMs": 324874,
+      "resultPreview": "{\"dimension\":\"data-integrity\",\"confirmed_ids\":[\"data-integrity-1\",\"dup-send-1\",\"review-gate-1\",\"data-integrity-2\",\"data-integrity-3\",\"data-integrity-4\",\"state-machine-1\",\"writeback-1\",\"recipient-check-1\",\"race-1\",\"range-cap-1\",\"batch-count-1\",\"overwrite-1\",\"citation-sync-1\",\"import-seq-1\",\"range-cap-2\",\"key-type-1\",\"version-enum-1\",\"link-gate-1\",\"k-convention-1\",\"config-1\",\"send-log-1\",\"doc-drift-…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "verify:docs-and-prompts",
+      "phaseIndex": 2,
+      "phaseTitle": "Verify",
+      "agentId": "aa7ad98189de63f58",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1783961691436,
+      "queuedAt": 1783961691436,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "docs-and-prompts",
+      "promptPreview": "You are an adversarial verifier. Another reviewer audited /Users/yinchenghou/Desktop/media-pitch-pipeline (dimension: docs-and-prompts) and reported these findings:\n\n[\n {\n  \"id\": \"docs-and-prompts-1\",\n  \"file\": \"/Users/yinchenghou/Desktop/media-pitch-pipeline/workflows/B-draft-and-send.md\",\n  \"line\": 37,\n  \"issue\": \"No doc anywhere (B workflow step 7/8, AGENTS.md 阶段 7) defines duplicate-send preve…",
+      "lastProgressAt": 1783962008285,
+      "tokens": 92021,
+      "toolCalls": 29,
+      "durationMs": 316848,
+      "resultPreview": "{\"dimension\":\"docs-and-prompts\",\"confirmed_ids\":[\"docs-and-prompts-1\",\"docs-and-prompts-2\",\"docs-and-prompts-3\",\"docs-and-prompts-4\",\"docs-and-prompts-5\",\"docs-and-prompts-6\",\"docs-and-prompts-7\",\"docs-and-prompts-8\",\"docs-and-prompts-9\",\"docs-and-prompts-10\",\"docs-and-prompts-11\",\"docs-and-prompts-12\",\"docs-and-prompts-13\",\"docs-and-prompts-14\",\"docs-and-prompts-15\",\"docs-and-prompts-16\",\"docs-an…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "verify:bundle-and-env",
+      "phaseIndex": 2,
+      "phaseTitle": "Verify",
+      "agentId": "a5485029b48c6c308",
+      "model": "claude-fable-5",
+      "state": "error",
+      "startedAt": 1783961952582,
+      "queuedAt": 1783961952580,
+      "attempt": 1,
+      "lastToolName": "Bash",
+      "lastToolSummary": "python3 -c \" import json r=json.load(open('/Users/yinchengh…",
+      "promptPreview": "You are an adversarial verifier. Another reviewer audited /Users/yinchenghou/Desktop/media-pitch-pipeline (dimension: bundle-and-env) and reported these findings:\n\n[\n {\n  \"id\": \"bundle-and-env-1\",\n  \"file\": \"/Users/yinchenghou/Desktop/media-pitch-pipeline/send_batch.py\",\n  \"line\": 51,\n  \"issue\": \"Canonical sender has no duplicate-send guard and loses its log on mid-batch crash: nothing checks the …",
+      "lastProgressAt": 1783962319097,
+      "error": "You've hit your session limit · resets 8:10pm (Europe/London)",
+      "tokens": 100434,
+      "toolCalls": 32,
+      "durationMs": 366515
+    }
+  ],
+  "totalTokens": 916715,
+  "totalToolCalls": 267
+}

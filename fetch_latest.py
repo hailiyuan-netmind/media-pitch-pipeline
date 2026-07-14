@@ -138,7 +138,9 @@ def load_outlets_from_sheet():
     from lark_client import LarkClient
 
     c = LarkClient()
-    d = c.get_sheet_values(SHEET_TOKEN, f"{LIST_SHEET}!A2:I42", as_user=True)
+    meta = c._api("GET", f"/sheets/v2/spreadsheets/{SHEET_TOKEN}/metainfo", as_user=True)
+    nrows = next((sh.get("rowCount", 200) for sh in meta["sheets"] if sh["sheetId"] == LIST_SHEET), 200)
+    d = c.get_sheet_values(SHEET_TOKEN, f"{LIST_SHEET}!A2:I{nrows}", as_user=True)
     outlets = []
     for row in d["valueRange"]["values"]:
         if not row or row[0] is None:

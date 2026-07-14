@@ -106,6 +106,21 @@ def main():
             args.sheet_token, f"{sid}!A{first}:{col_end}{first + len(out) - 1}",
             out, as_user=True,
         )
+        # 状态(L) + 分类标签(M)（可发送名单）；无邮箱 tab 分类写 D 列
+        data_first = first + (1 if used == 0 else 0)
+        if tab == "可发送名单":
+            extra = [[it.get("status", "已核实"), it.get("tag", "")] for it in rows]
+            c.update_sheet_values(args.sheet_token, f"{sid}!L1:M1", [["状态", "分类"]], as_user=True) if used == 0 else None
+            c.update_sheet_values(
+                args.sheet_token, f"{sid}!L{data_first}:M{data_first + len(rows) - 1}",
+                extra, as_user=True,
+            )
+        elif tab == "对路但无邮箱":
+            extra = [[it.get("tag", "")] for it in rows]
+            c.update_sheet_values(
+                args.sheet_token, f"{sid}!D{data_first}:D{data_first + len(rows) - 1}",
+                extra, as_user=True,
+            )
         print(f"{tab}: 写入 {len(rows)} 行（从第 {first} 行起）")
 
 
