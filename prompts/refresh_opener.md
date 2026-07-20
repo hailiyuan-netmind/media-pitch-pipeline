@@ -23,7 +23,11 @@ For EACH outlet:
 3. Rules, same register as the originals: 2-3 sentences; concrete; one clear
    specific observation tied to their piece; no "truly / fascinating / impressive"
    filler; no em-dashes; sounds like a person.
-   BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not.
+   BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not. The opener praises their RECENT piece and your reaction to it. Do NOT recite
+   biography or about-page facts (years active, post counts, ad-free/platform
+   history) in the opener; that reads as scraped research. One career-arc nod
+   may live in the closing line, one clause max. Say you admire the specific
+   thing and why, in plain words..
    - version=AI: the body that follows begins "We also recently ran an experiment
      evaluating an LLM capability that is widely used in practice but has received
      little systematic assessment." The opener must NOT say "we ran an experiment"

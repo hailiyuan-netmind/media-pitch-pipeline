@@ -31,7 +31,11 @@ For EACH outlet:
      transition sentences may stay.
    - Style: concrete, one specific compliment tied to their actual work; no
      "truly/fascinating/impressive" filler; no em-dashes; sounds like a person.
-   BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not.
+   BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not. The opener praises their RECENT piece and your reaction to it. Do NOT recite
+   biography or about-page facts (years active, post counts, ad-free/platform
+   history) in the opener; that reads as scraped research. One career-arc nod
+   may live in the closing line, one clause max. Say you admire the specific
+   thing and why, in plain words..
    - If the cited work is wrong or stale, fix the opener to reference something
      real you found, and say so in notes.
 5. closing_line: ONE sentence starting exactly "Thanks for your time and for "
