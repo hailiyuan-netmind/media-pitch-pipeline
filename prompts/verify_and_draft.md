@@ -31,6 +31,7 @@ For EACH outlet:
      transition sentences may stay.
    - Style: concrete, one specific compliment tied to their actual work; no
      "truly/fascinating/impressive" filler; no em-dashes; sounds like a person.
+   BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not.
    - If the cited work is wrong or stale, fix the opener to reference something
      real you found, and say so in notes.
 5. closing_line: ONE sentence starting exactly "Thanks for your time and for "

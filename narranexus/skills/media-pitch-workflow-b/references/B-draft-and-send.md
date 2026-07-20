@@ -25,7 +25,9 @@
    收件人是最了解自己的人，任何不准确都会毁掉整封 pitch。
    付费墙文章只能引用可见部分：读不到全文就不得替作者立论或转述其论证细节。
    同时检查：全文对收件人一律第二人称（开头第三人称点名 = 违规）；
-   风格禁项（em-dash、we ran an experiment、truly/fascinating 类吹捧词）。
+   风格禁项（em-dash、we ran an experiment、truly/fascinating 类吹捧词；
+   对比句式脚手架 not X but Y / rather than / not just / isn't just...it's 一律视为 AI 味，
+   以零为目标、一封最多一处——直接说事物是什么，不说它不是什么）。
    任何一条不过就重写，核查记录随汇报提交。
 4. **拼装**：`python3 scripts/assemble_emails.py`（模板在文件顶部 BODY_AI/BODY_LIFESTYLE；
    AI 版开头不得含 "we ran an experiment"，正文首句已有）。写入草稿 tab。

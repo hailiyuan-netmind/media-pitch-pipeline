@@ -23,6 +23,7 @@ For EACH outlet:
 3. Rules, same register as the originals: 2-3 sentences; concrete; one clear
    specific observation tied to their piece; no "truly / fascinating / impressive"
    filler; no em-dashes; sounds like a person.
+   BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not.
    - version=AI: the body that follows begins "We also recently ran an experiment
      evaluating an LLM capability that is widely used in practice but has received
      little systematic assessment." The opener must NOT say "we ran an experiment"
