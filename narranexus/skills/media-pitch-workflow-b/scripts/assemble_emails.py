@@ -59,7 +59,7 @@ Hope to hear from you soon!
 
 Kind regards,
 Shenghui Tao
-Content Writer"""
+Content Writer @NetMind"""
 
 BODY_LIFESTYLE = """People ask AI relationship questions all the time, from "Does this person like me?" to "Should I text back?" But have you ever thought about how these models would behave in a relationship themselves? And what would happen if they joined a dating show?
 
@@ -92,7 +92,7 @@ Hope to hear from you soon!
 
 Kind regards,
 Shenghui Tao
-Content Writer"""
+Content Writer @NetMind"""
 
 
 def main():
