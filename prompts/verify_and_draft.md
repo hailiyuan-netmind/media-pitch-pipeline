@@ -26,7 +26,7 @@ For EACH outlet:
    voice. If empty, research the outlet and write a fresh 2-3 sentence opener
    citing one real recent piece you actually found.
    - version=AI: body begins "{AI_BODY_FIRST_LINE}" — opener must NOT itself say
-     "we ran an experiment"; end on the praise/observation.
+     "we ran an experiment"; end on the praise/observation. The opener's final sentence must give the body's "We also..." an antecedent: end on THEM examining/testing/tracking something. If no such parallel exists, the seam reads forced..
    - version=lifestyle: body begins "{LIFESTYLE_BODY_FIRST_LINE}" — existing
      transition sentences may stay.
    - Style: concrete, one specific compliment tied to their actual work; no

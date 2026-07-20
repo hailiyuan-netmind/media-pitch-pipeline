@@ -27,7 +27,7 @@ For EACH outlet:
    - version=AI: the body that follows begins "We also recently ran an experiment
      evaluating an LLM capability that is widely used in practice but has received
      little systematic assessment." The opener must NOT say "we ran an experiment"
-     and should end on the praise/observation itself.
+     and should end on the praise/observation itself. The opener's final sentence must give the body's "We also..." an antecedent: end on THEM examining/testing/tracking something. If no such parallel exists, the seam reads forced..
    - version=lifestyle: the body begins with the hook "People ask AI relationship
      questions all the time…"; a transition sentence like "We just ran a small
      experiment at NetMind that fits that angle" is allowed.
