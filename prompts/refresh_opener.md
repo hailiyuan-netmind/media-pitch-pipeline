@@ -27,7 +27,10 @@ For EACH outlet:
    biography or about-page facts (years active, post counts, ad-free/platform
    history) in the opener; that reads as scraped research. One career-arc nod
    may live in the closing line, one clause max. Say you admire the specific
-   thing and why, in plain words. Cite a piece AUTHORED BY the greeted recipient. If the best-fit piece is by a
+   thing and why, in plain words. Never crown
+   an obvious observation as "sharpest/best/most X" — praise only what is
+   genuinely non-obvious; the recipient knows which of their points are trivial.
+   When a praise point is thin, DELETE it instead of inflating it. Cite a piece AUTHORED BY the greeted recipient. If the best-fit piece is by a
    colleague/contributor, either switch to a recipient-authored piece or use the
    publication-act frame ("the piece you ran/published"); NEVER open the first
    sentence with another person's byline while greeting someone else..
