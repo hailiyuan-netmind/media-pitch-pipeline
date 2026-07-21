@@ -28,7 +28,10 @@ For EACH outlet:
    - version=AI: body begins "{AI_BODY_FIRST_LINE}" — opener must NOT itself say
      "we ran an experiment"; end on the praise/observation. The opener's final sentence must give the body's "We also..." an antecedent: end on THEM examining/testing/tracking something. If no such parallel exists, the seam reads forced..
    - version=lifestyle: body begins "{LIFESTYLE_BODY_FIRST_LINE}" — existing
-     transition sentences may stay.
+     transition sentences may stay. For lifestyle
+   version the final sentence must land on PEOPLE'S BEHAVIOR (how people live,
+   love, or talk through tech), never on praising the writer's craft — the hook
+   "People ask AI relationship questions..." must read as a continuation.
    - Style: concrete, one specific compliment tied to their actual work; no
      "truly/fascinating/impressive" filler; no em-dashes; sounds like a person.
    BANNED scaffolds ("not X but Y" / "rather than" / "not just" / "isn't just... it's"): target zero, never more than one — say what the thing IS, not what it is not. The opener praises their RECENT piece and your reaction to it. Do NOT recite

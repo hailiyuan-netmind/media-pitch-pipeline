@@ -37,7 +37,10 @@ For EACH outlet:
      and should end on the praise/observation itself. The opener's final sentence must give the body's "We also..." an antecedent: end on THEM examining/testing/tracking something. If no such parallel exists, the seam reads forced..
    - version=lifestyle: the body begins with the hook "People ask AI relationship
      questions all the time…"; a transition sentence like "We just ran a small
-     experiment at NetMind that fits that angle" is allowed.
+     experiment at NetMind that fits that angle" is allowed. For lifestyle
+   version the final sentence must land on PEOPLE'S BEHAVIOR (how people live,
+   love, or talk through tech), never on praising the writer's craft — the hook
+   "People ask AI relationship questions..." must read as a continuation.
 4. Keep the greeting/person the same.
 
 Write {OUTPUT_JSON}:
