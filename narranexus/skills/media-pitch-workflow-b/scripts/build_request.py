@@ -105,6 +105,18 @@ def main():
 
     if not text.startswith("Hi "):
         raise SystemExit(f"row {args.row} 正文异常（不以 Hi 开头）")
+    # 行号身份断言（审计修复：拒绝两表错位）
+    draft_no = flat(row[0]).strip()
+    if draft_no and int(float(draft_no)) != args.row:
+        raise SystemExit(f"草稿表第{r}行编号 {draft_no} != --row {args.row}，两表可能错位")
+    lrow = c.get_sheet_values(SHEET_TOKEN, f"{LIST_SHEET}!A{r}:B{r}", as_user=True)["valueRange"]["values"][0]
+    lno, lmedia = flat(lrow[0]).strip(), flat(lrow[1]).strip()
+    if lno and int(float(lno)) != args.row:
+        raise SystemExit(f"名单表第{r}行编号 {lno} != --row {args.row}")
+    if lmedia and media.strip() != lmedia:
+        raise SystemExit(f"两表媒体名不一致: 草稿 {media!r} vs 名单 {lmedia!r}")
+    if "@" not in email_addr or " " in email_addr:
+        raise SystemExit(f"邮箱异常: {email_addr!r}")
 
     md = to_markdown(text)
     validate_links(md)
