@@ -27,7 +27,10 @@ For EACH outlet:
    biography or about-page facts (years active, post counts, ad-free/platform
    history) in the opener; that reads as scraped research. One career-arc nod
    may live in the closing line, one clause max. Say you admire the specific
-   thing and why, in plain words..
+   thing and why, in plain words. Cite a piece AUTHORED BY the greeted recipient. If the best-fit piece is by a
+   colleague/contributor, either switch to a recipient-authored piece or use the
+   publication-act frame ("the piece you ran/published"); NEVER open the first
+   sentence with another person's byline while greeting someone else..
    - version=AI: the body that follows begins "We also recently ran an experiment
      evaluating an LLM capability that is widely used in practice but has received
      little systematic assessment." The opener must NOT say "we ran an experiment"

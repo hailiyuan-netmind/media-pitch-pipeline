@@ -35,7 +35,10 @@ For EACH outlet:
    biography or about-page facts (years active, post counts, ad-free/platform
    history) in the opener; that reads as scraped research. One career-arc nod
    may live in the closing line, one clause max. Say you admire the specific
-   thing and why, in plain words..
+   thing and why, in plain words. Cite a piece AUTHORED BY the greeted recipient. If the best-fit piece is by a
+   colleague/contributor, either switch to a recipient-authored piece or use the
+   publication-act frame ("the piece you ran/published"); NEVER open the first
+   sentence with another person's byline while greeting someone else..
    - If the cited work is wrong or stale, fix the opener to reference something
      real you found, and say so in notes.
 5. closing_line: ONE sentence starting exactly "Thanks for your time and for "
