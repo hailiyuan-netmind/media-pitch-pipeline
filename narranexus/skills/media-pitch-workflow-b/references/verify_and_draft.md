@@ -21,7 +21,10 @@ For EACH outlet:
    Organization/team/multiple → "<Media> team", or "First1 and First2" if exactly
    two named people.
 3. version: "AI" (technical readership) or "lifestyle" (culture/philosophy/design/
-   general). Default "AI" unless clearly non-technical.
+   general). Default "AI" unless clearly non-technical. VERSION FOLLOWS THE OPENER'S THEME, not the outlet's category tag: if the
+   opener lands on "AI entering people's lives/emotions/daily routines", use the
+   lifestyle body (+bridge); if it lands on testing/evaluating/industry, use the
+   AI body. The category tag is only the initial default.
 4. opener_final: finalize opener_draft with a LIGHT touch — keep its substance and
    voice. If empty, research the outlet and write a fresh 2-3 sentence opener
    citing one real recent piece you actually found.

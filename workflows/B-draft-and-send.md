@@ -31,6 +31,8 @@
    对比句式脚手架 not X but Y / rather than / not just / isn't just...it's 一律视为 AI 味，
    以零为目标、一封最多一处——直接说事物是什么，不说它不是什么）。
    任何一条不过就重写，核查记录随汇报提交。
+3a. **版本跟开头主题走**：开头落在"AI 进入人的生活/情感"用情感版+桥句，
+   落在"检验/评测/产业"用 AI 版；媒体分类标签只是初始默认（2026-07-21 两案验证）。
 4. **拼装**：`python3 scripts/assemble_emails.py`（模板在文件顶部 BODY_AI/BODY_LIFESTYLE；
    AI 版开头不得含 "we ran an experiment"，正文首句已有）。写入草稿 tab。
 5. **新鲜度**：发送当天 `python3 scripts/fetch_latest.py --from-sheet --write-back`；
