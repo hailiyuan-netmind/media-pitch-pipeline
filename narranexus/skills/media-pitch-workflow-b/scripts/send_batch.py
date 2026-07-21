@@ -56,6 +56,7 @@ def clean_name(author):
     """'Kate Lindsay (撰稿/联合创始人), Nick Catucci (编辑)' -> 'Kate Lindsay, Nick Catucci' -> 主体首段"""
     s = re.sub(r"[（(][^）)]*[）)]", "", author)
     s = re.split(r"[;；]", s)[0]
+    s = re.split(r"[，,]?\s*[\u4e00-\u9fff]", s)[0]  # 第一个中文字符处截断
     s = re.sub(r"\s+", " ", s).strip(" ,，")
     return s or author.strip()
 
