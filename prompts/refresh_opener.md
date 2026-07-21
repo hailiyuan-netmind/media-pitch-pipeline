@@ -40,7 +40,12 @@ For EACH outlet:
      experiment at NetMind that fits that angle" is allowed. For lifestyle
    version the final sentence must land on PEOPLE'S BEHAVIOR (how people live,
    love, or talk through tech), never on praising the writer's craft — the hook
-   "People ask AI relationship questions..." must read as a continuation.
+   "People ask AI relationship questions..." must read as a continuation. LIFESTYLE BRIDGE: between the opener and the fixed hook, insert ONE bridge
+   sentence (under ~18 words) that points back to the opener's specific theme
+   and pivots to AI entering people's emotional lives, so "People ask AI
+   relationship questions..." reads as a continuation. No new factual claims.
+   When refreshing a lifestyle opener, rewrite the bridge with it (output field
+   "bridge").
 4. Keep the greeting/person the same.
 
 Write {OUTPUT_JSON}:

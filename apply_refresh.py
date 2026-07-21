@@ -65,7 +65,11 @@ def main():
             continue
 
         greeting = email.split("\n", 1)[0]
-        new_email = f"{greeting}\n\n{it['new_opener']}\n\n{email[marker_pos:]}"
+        bridge = (it.get("bridge") or "").strip()
+        body_part = email[marker_pos:]
+        if bridge:
+            body_part = bridge + (" " if not bridge.endswith(" ") else "") + body_part
+        new_email = f"{greeting}\n\n{it['new_opener']}\n\n{body_part}"
         stamp = f"[{date.today()}] 开头已刷新至最新文章《{it.get('cited_title', '?')}》({it.get('cited_date', '?')})"
         new_note = f"{note} | {stamp}" if note else stamp
 
