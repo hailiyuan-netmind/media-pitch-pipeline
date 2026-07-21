@@ -11,3 +11,5 @@ __pycache__/
 
 # campaign 私有配置（真实 token）
 campaign.json
+# Codex 协作会话产物（requests/ 含记者邮箱 PII）
+codex-work/
