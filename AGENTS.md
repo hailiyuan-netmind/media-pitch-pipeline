@@ -111,6 +111,7 @@ campaign owner 在对话里的明确指令（如"可以投了，某三家不发"
 | Reuters 等 401 | 反爬，不是死链；浏览器验证 |
 | test 邮件没收到 | "TEST -" 前缀易进垃圾箱；201≠送达，查 Brevo events |
 | --test-to 后 CC 丢失 | 预期行为；CC 场景写进 request 手动加前缀 |
+| 同一收件人多渠道触达 | 先发主渠道（本人信箱），后发渠道在开头段后加一段透明披露（Full transparency: I just sent...），时序保证披露为真 |
 
 ## 首轮基准（质量参照）
 
